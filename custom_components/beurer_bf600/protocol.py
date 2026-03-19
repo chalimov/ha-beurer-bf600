@@ -100,6 +100,14 @@ async def read_scale(
     user_index: int = 1,
 ) -> ScaleData:
     """Connect to a scale and read all available measurement data."""
+    # Log discovered GATT services for diagnostics
+    if client.services:
+        for service in client.services:
+            chars = ", ".join(
+                f"{c.uuid}({c.properties})" for c in service.characteristics
+            )
+            _LOGGER.debug("GATT service %s: %s", service.uuid, chars)
+
     ctx = _ReadContext(client, user_index)
 
     if model_family == MODEL_FAMILY_BF700:
@@ -145,16 +153,18 @@ async def _read_bf600(ctx: _ReadContext) -> None:
             CHAR_WEIGHT_MEASUREMENT,
             lambda c, d: _on_weight_measurement(ctx, c, d),
         )
-    except Exception:
-        _LOGGER.debug("Weight Measurement characteristic unavailable")
+        _LOGGER.debug("Subscribed to Weight Measurement (0x2A9D)")
+    except Exception as e:
+        _LOGGER.debug("Weight Measurement unavailable: %s", e)
 
     try:
         await client.start_notify(
             CHAR_BODY_COMPOSITION_MEASUREMENT,
             lambda c, d: _on_body_composition(ctx, c, d),
         )
-    except Exception:
-        _LOGGER.debug("Body Composition characteristic unavailable")
+        _LOGGER.debug("Subscribed to Body Composition Measurement (0x2A9C)")
+    except Exception as e:
+        _LOGGER.debug("Body Composition unavailable: %s", e)
 
     # Consent for user index
     try:
@@ -164,9 +174,10 @@ async def _read_bf600(ctx: _ReadContext) -> None:
         )
         consent_cmd = struct.pack("<BBH", UCP_CONSENT, ctx.user_index, 0)
         await client.write_gatt_char(CHAR_USER_CONTROL_POINT, consent_cmd, response=True)
+        _LOGGER.debug("UCP consent sent for user %d", ctx.user_index)
         await asyncio.sleep(0.5)
-    except Exception:
-        _LOGGER.debug("UCP consent unavailable, skipping")
+    except Exception as e:
+        _LOGGER.debug("UCP consent unavailable: %s", e)
 
     # Write current time
     await _write_current_time(client)
