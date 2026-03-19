@@ -17,9 +17,56 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR, Platform.SWITCH]
 
+_PATCHED = False
+
+
+def _patch_esphome_uuid_parser() -> None:
+    """Monkey-patch aioesphomeapi to handle malformed BLE UUIDs.
+
+    The ESPHome BLE proxy can crash with IndexError when a device sends
+    a GATT service with an empty or malformed UUID protobuf field.
+    This patch makes _convert_bluetooth_uuid resilient to such cases.
+    """
+    global _PATCHED
+    if _PATCHED:
+        return
+
+    try:
+        import aioesphomeapi.model as model
+
+        _original = model._convert_bluetooth_uuid
+
+        def _safe_convert_bluetooth_uuid(value):
+            try:
+                return _original(value)
+            except (IndexError, AttributeError, TypeError):
+                # Fallback: try to reconstruct from whatever data is available
+                uuid_list = getattr(value, "uuid", None) or []
+                if len(uuid_list) == 2:
+                    high, low = uuid_list
+                    from uuid import UUID
+                    return str(UUID(int=(high << 64) | low))
+                if len(uuid_list) == 1:
+                    # Single value — treat as short UUID
+                    return f"{uuid_list[0]:08x}-0000-1000-8000-00805f9b34fb"
+                short = getattr(value, "short_uuid", 0)
+                if short:
+                    return f"{short:08x}-0000-1000-8000-00805f9b34fb"
+                # Last resort: return a placeholder UUID
+                _LOGGER.debug("Could not parse BLE UUID: %s, using placeholder", value)
+                return "00000000-0000-1000-8000-00805f9b34fb"
+
+        model._convert_bluetooth_uuid = _safe_convert_bluetooth_uuid
+        _PATCHED = True
+        _LOGGER.debug("Patched aioesphomeapi UUID parser for BLE proxy compatibility")
+    except ImportError:
+        pass  # aioesphomeapi not installed — direct BT adapter, no patch needed
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Beurer Scale from a config entry."""
+    _patch_esphome_uuid_parser()
+
     address: str = entry.data[CONF_ADDRESS]
     name: str = entry.data.get(CONF_NAME, "Beurer Scale")
 
