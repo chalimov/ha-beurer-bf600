@@ -76,15 +76,6 @@ SENSOR_DESCRIPTIONS: tuple[BeurerSensorDescription, ...] = (
         value_fn=lambda d: d.body_water_percent,
     ),
     BeurerSensorDescription(
-        key="bone_mass",
-        translation_key="bone_mass",
-        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:bone",
-        value_fn=lambda d: d.bone_mass_kg,
-        precision=2,
-    ),
-    BeurerSensorDescription(
         key="basal_metabolism",
         translation_key="basal_metabolism",
         native_unit_of_measurement="kJ",
