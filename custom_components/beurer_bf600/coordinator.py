@@ -145,6 +145,15 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
             self._connected = True
             _LOGGER.debug("Connected to %s", self._address)
 
+            # Pair/bond with the scale — required for indications to work
+            try:
+                await client.pair()
+                _LOGGER.debug("Paired with %s", self._address)
+            except NotImplementedError:
+                _LOGGER.debug("Pairing not supported by BLE backend")
+            except Exception as err:
+                _LOGGER.debug("Pairing failed (may already be bonded): %s", err)
+
             try:
                 data = await read_scale(
                     client,
