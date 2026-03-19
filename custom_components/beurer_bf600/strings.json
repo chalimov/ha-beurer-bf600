@@ -49,6 +49,7 @@
       "bmi": { "name": "BMI" },
       "basal_metabolism": { "name": "Basal metabolism" },
       "impedance": { "name": "Impedance" },
+      "measurement_time": { "name": "Last measurement" },
       "battery": { "name": "Battery" }
     },
     "binary_sensor": {

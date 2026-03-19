@@ -27,10 +27,11 @@ from .protocol import ScaleData
 class BeurerSensorDescription(SensorEntityDescription):
     """Describe a Beurer scale sensor."""
 
-    value_fn: Callable[[ScaleData], float | int | None]
+    value_fn: Callable[[ScaleData], float | int | str | None]
     precision: int = 1
 
 
+# Ordered from most important to least important
 SENSOR_DESCRIPTIONS: tuple[BeurerSensorDescription, ...] = (
     BeurerSensorDescription(
         key="weight",
@@ -38,8 +39,17 @@ SENSOR_DESCRIPTIONS: tuple[BeurerSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfMass.KILOGRAMS,
         device_class=SensorDeviceClass.WEIGHT,
         state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:scale-bathroom",
         value_fn=lambda d: d.weight_kg,
         precision=2,
+    ),
+    BeurerSensorDescription(
+        key="bmi",
+        translation_key="bmi",
+        native_unit_of_measurement="kg/m\u00b2",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:human-male-height",
+        value_fn=lambda d: d.bmi,
     ),
     BeurerSensorDescription(
         key="body_fat",
@@ -50,20 +60,20 @@ SENSOR_DESCRIPTIONS: tuple[BeurerSensorDescription, ...] = (
         value_fn=lambda d: d.body_fat_percent,
     ),
     BeurerSensorDescription(
-        key="body_water",
-        translation_key="body_water",
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:water-percent",
-        value_fn=lambda d: d.body_water_percent,
-    ),
-    BeurerSensorDescription(
         key="muscle_mass",
         translation_key="muscle_mass",
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:arm-flex",
         value_fn=lambda d: d.muscle_percent,
+    ),
+    BeurerSensorDescription(
+        key="body_water",
+        translation_key="body_water",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:water-percent",
+        value_fn=lambda d: d.body_water_percent,
     ),
     BeurerSensorDescription(
         key="bone_mass",
@@ -73,14 +83,6 @@ SENSOR_DESCRIPTIONS: tuple[BeurerSensorDescription, ...] = (
         icon="mdi:bone",
         value_fn=lambda d: d.bone_mass_kg,
         precision=2,
-    ),
-    BeurerSensorDescription(
-        key="bmi",
-        translation_key="bmi",
-        native_unit_of_measurement="kg/m\u00b2",
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:human-male-height",
-        value_fn=lambda d: d.bmi,
     ),
     BeurerSensorDescription(
         key="basal_metabolism",
@@ -99,6 +101,16 @@ SENSOR_DESCRIPTIONS: tuple[BeurerSensorDescription, ...] = (
         icon="mdi:flash",
         value_fn=lambda d: d.impedance,
         precision=0,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    BeurerSensorDescription(
+        key="measurement_time",
+        translation_key="measurement_time",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        icon="mdi:clock-outline",
+        value_fn=lambda d: d.timestamp.isoformat() if d.timestamp else None,
+        precision=0,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     BeurerSensorDescription(
         key="battery",
@@ -156,18 +168,21 @@ class BeurerScaleSensor(
             manufacturer="Beurer / Sanitas",
             model=name,
         )
+        self._last_value = None
 
     @property
-    def native_value(self) -> float | int | None:
-        """Return the sensor value."""
-        if self.coordinator.data is None:
-            return None
-        value = self.entity_description.value_fn(self.coordinator.data)
-        if value is not None:
-            return round(value, self.entity_description.precision)
-        return None
+    def native_value(self):
+        """Return the sensor value. Keeps last known value when scale is off."""
+        if self.coordinator.data is not None and self.coordinator.data.has_data():
+            value = self.entity_description.value_fn(self.coordinator.data)
+            if value is not None:
+                if isinstance(value, str):
+                    self._last_value = value
+                else:
+                    self._last_value = round(value, self.entity_description.precision)
+        return self._last_value
 
     @property
     def available(self) -> bool:
-        """Return True if the sensor has ever received data."""
-        return self.coordinator.data is not None and self.coordinator.data.has_data()
+        """Available once we've ever received data."""
+        return self._last_value is not None
