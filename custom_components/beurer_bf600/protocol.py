@@ -183,27 +183,8 @@ async def _read_bf600(ctx: _ReadContext) -> None:
     except Exception as e:
         _LOGGER.debug("UCP consent unavailable: %s", e)
 
-    # Write current time
-    await _write_current_time(client)
-
-    # Trigger measurement sync via database change increment
-    try:
-        raw = await client.read_gatt_char(CHAR_DATABASE_CHANGE_INCREMENT)
-        if raw and len(raw) >= 4:
-            current = struct.unpack("<I", raw[:4])[0]
-        else:
-            current = 0
-        await client.write_gatt_char(
-            CHAR_DATABASE_CHANGE_INCREMENT,
-            struct.pack("<I", current + 1),
-            response=True,
-        )
-        _LOGGER.debug("DatabaseChangeIncrement updated to %d", current + 1)
-    except Exception as e:
-        _LOGGER.debug("DatabaseChangeIncrement failed: %s", e)
-
-    # Try custom service 0xFFFF (BF105/BF950/SBF73 variant)
-    # Subscribe to user list notifications, then request measurement
+    # Subscribe to custom service 0xFFFF (BF105/BF950/SBF73 variant)
+    # Do this BEFORE any slow operations to avoid scale disconnect
     try:
         await client.start_notify(
             CHAR_CUSTOM_FFFF_USER_LIST,
@@ -222,7 +203,10 @@ async def _read_bf600(ctx: _ReadContext) -> None:
     except Exception as e:
         _LOGGER.debug("Custom FFFF measure unavailable: %s", e)
 
-    # Write 0x00 to user list to trigger initial sync (openScale pattern)
+    # Write current time
+    await _write_current_time(client)
+
+    # Trigger user list query (openScale BF105 pattern)
     try:
         await client.write_gatt_char(
             CHAR_CUSTOM_FFFF_USER_LIST, bytes([0x00]), response=True
@@ -230,6 +214,8 @@ async def _read_bf600(ctx: _ReadContext) -> None:
         _LOGGER.debug("Wrote 0x00 to custom user list")
     except Exception as e:
         _LOGGER.debug("Custom user list write failed: %s", e)
+
+    await asyncio.sleep(0.5)
 
     # Request measurement via custom 0x0006 char
     try:
@@ -240,18 +226,30 @@ async def _read_bf600(ctx: _ReadContext) -> None:
     except Exception as e:
         _LOGGER.debug("Custom measure request failed: %s", e)
 
-    # Also try custom FFF0 service (BF600 variant, different UUID)
+    # Try DatabaseChangeIncrement with short timeout (may timeout on ESPHome proxy)
     try:
-        await client.write_gatt_char(
-            CHAR_CUSTOM_TAKE_MEASUREMENT, bytes([0x00]), response=True
+        raw = await asyncio.wait_for(
+            client.read_gatt_char(CHAR_DATABASE_CHANGE_INCREMENT), timeout=5.0
         )
-        _LOGGER.debug("Wrote to FFF0 TakeMeasurement")
-    except Exception:
-        _LOGGER.debug("FFF0 TakeMeasurement unavailable")
+        if raw and len(raw) >= 4:
+            current = struct.unpack("<I", raw[:4])[0]
+        else:
+            current = 0
+        await asyncio.wait_for(
+            client.write_gatt_char(
+                CHAR_DATABASE_CHANGE_INCREMENT,
+                struct.pack("<I", current + 1),
+                response=True,
+            ),
+            timeout=5.0,
+        )
+        _LOGGER.debug("DatabaseChangeIncrement updated to %d", current + 1)
+    except Exception as e:
+        _LOGGER.debug("DatabaseChangeIncrement failed (non-critical): %s", e)
 
     # Wait for data
     try:
-        await asyncio.wait_for(ctx.event.wait(), timeout=20.0)
+        await asyncio.wait_for(ctx.event.wait(), timeout=15.0)
     except asyncio.TimeoutError:
         _LOGGER.debug("Timeout waiting for scale data")
 
