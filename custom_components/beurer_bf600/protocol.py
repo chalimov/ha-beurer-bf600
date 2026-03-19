@@ -34,6 +34,8 @@ from .const import (
     CHAR_BODY_COMPOSITION_MEASUREMENT,
     CHAR_CURRENT_TIME,
     CHAR_CUSTOM_FFE1,
+    CHAR_CUSTOM_FFFF_MEASURE_REQ,
+    CHAR_CUSTOM_FFFF_USER_LIST,
     CHAR_CUSTOM_TAKE_MEASUREMENT,
     CHAR_DATABASE_CHANGE_INCREMENT,
     CHAR_USER_CONTROL_POINT,
@@ -196,16 +198,56 @@ async def _read_bf600(ctx: _ReadContext) -> None:
             struct.pack("<I", current + 1),
             response=True,
         )
-    except Exception:
-        _LOGGER.debug("Could not trigger sync via DatabaseChangeIncrement")
+        _LOGGER.debug("DatabaseChangeIncrement updated to %d", current + 1)
+    except Exception as e:
+        _LOGGER.debug("DatabaseChangeIncrement failed: %s", e)
 
-    # Also try custom FFF0 service
+    # Try custom service 0xFFFF (BF105/BF950/SBF73 variant)
+    # Subscribe to user list notifications, then request measurement
+    try:
+        await client.start_notify(
+            CHAR_CUSTOM_FFFF_USER_LIST,
+            lambda c, d: _on_custom_notification(ctx, c, d),
+        )
+        _LOGGER.debug("Subscribed to custom FFFF user list (0x0001)")
+    except Exception as e:
+        _LOGGER.debug("Custom FFFF user list unavailable: %s", e)
+
+    try:
+        await client.start_notify(
+            CHAR_CUSTOM_FFFF_MEASURE_REQ,
+            lambda c, d: _on_custom_notification(ctx, c, d),
+        )
+        _LOGGER.debug("Subscribed to custom FFFF measure (0x0006)")
+    except Exception as e:
+        _LOGGER.debug("Custom FFFF measure unavailable: %s", e)
+
+    # Write 0x00 to user list to trigger initial sync (openScale pattern)
+    try:
+        await client.write_gatt_char(
+            CHAR_CUSTOM_FFFF_USER_LIST, bytes([0x00]), response=True
+        )
+        _LOGGER.debug("Wrote 0x00 to custom user list")
+    except Exception as e:
+        _LOGGER.debug("Custom user list write failed: %s", e)
+
+    # Request measurement via custom 0x0006 char
+    try:
+        await client.write_gatt_char(
+            CHAR_CUSTOM_FFFF_MEASURE_REQ, bytes([0x00]), response=True
+        )
+        _LOGGER.debug("Wrote 0x00 to custom measure request")
+    except Exception as e:
+        _LOGGER.debug("Custom measure request failed: %s", e)
+
+    # Also try custom FFF0 service (BF600 variant, different UUID)
     try:
         await client.write_gatt_char(
             CHAR_CUSTOM_TAKE_MEASUREMENT, bytes([0x00]), response=True
         )
+        _LOGGER.debug("Wrote to FFF0 TakeMeasurement")
     except Exception:
-        _LOGGER.debug("Custom TakeMeasurement unavailable")
+        _LOGGER.debug("FFF0 TakeMeasurement unavailable")
 
     # Wait for data
     try:
@@ -381,6 +423,16 @@ def _on_body_composition(
 
     ctx.data.merge(m)
     ctx.event.set()
+
+
+def _on_custom_notification(
+    ctx: _ReadContext, _char: BleakGATTCharacteristic, data: bytearray
+) -> None:
+    """Handle notification from custom FFFF service (BF105/SBF73 variant)."""
+    _LOGGER.debug(
+        "Custom FFFF notification: char=%s len=%d data=%s",
+        _char.uuid, len(data), data.hex(),
+    )
 
 
 def _on_ucp_response(
