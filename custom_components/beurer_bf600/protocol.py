@@ -179,8 +179,10 @@ async def _read_bf600(ctx: _ReadContext) -> None:
     # UCP consent
     try:
         consent_cmd = struct.pack("<BBH", UCP_CONSENT, ctx.user_index, ctx.consent_code)
+        _LOGGER.debug("UCP consent cmd: %s (user=%d code=%d/0x%04X)",
+                       consent_cmd.hex(), ctx.user_index, ctx.consent_code, ctx.consent_code)
         await client.write_gatt_char(CHAR_USER_CONTROL_POINT, consent_cmd, response=True)
-        _LOGGER.debug("UCP consent sent for user %d", ctx.user_index)
+        _LOGGER.debug("UCP consent written OK")
     except Exception as e:
         _LOGGER.debug("UCP consent write failed: %s", e)
 
