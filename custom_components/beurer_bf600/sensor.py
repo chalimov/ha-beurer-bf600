@@ -175,5 +175,10 @@ class BeurerScaleSensor(
 
     @property
     def available(self) -> bool:
-        """Available once we've ever received data."""
-        return self._last_value is not None
+        """Available once coordinator has data."""
+        if self._last_value is not None:
+            return True
+        return (
+            self.coordinator.data is not None
+            and self.coordinator.data.has_data()
+        )
