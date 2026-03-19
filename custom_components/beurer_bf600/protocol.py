@@ -324,8 +324,10 @@ def _on_body_composition(
         m.basal_metabolism = struct.unpack_from("<H", data, offset)[0]
         offset += 2
 
+    muscle_pct = None
     if flags & BCM_FLAG_MUSCLE_PERCENTAGE and offset + 2 <= len(data):
-        offset += 2  # skip percentage, we want mass
+        muscle_pct = struct.unpack_from("<H", data, offset)[0] * 0.1
+        offset += 2
 
     if flags & BCM_FLAG_MUSCLE_MASS and offset + 2 <= len(data):
         raw = struct.unpack_from("<H", data, offset)[0]
@@ -361,6 +363,13 @@ def _on_body_composition(
         m.body_water_percent = (water_kg / m.weight_kg) * 100
     elif water_kg is not None:
         m.body_water_percent = water_kg  # fallback: store raw
+
+    # Convert muscle percentage to mass if we got percentage but not mass
+    if m.muscle_mass_kg is None and muscle_pct is not None and muscle_pct > 0:
+        # Use weight from this packet or from merged context
+        w = m.weight_kg or (ctx.data.weight_kg if ctx.data else None)
+        if w and w > 0:
+            m.muscle_mass_kg = w * muscle_pct / 100.0
 
     _LOGGER.debug(
         "Body composition: fat=%.1f%%, water=%.1f%%, muscle=%.3fkg",
