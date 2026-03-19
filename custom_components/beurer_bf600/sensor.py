@@ -95,14 +95,6 @@ SENSOR_DESCRIPTIONS: tuple[BeurerSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     BeurerSensorDescription(
-        key="user",
-        translation_key="user",
-        icon="mdi:account",
-        value_fn=lambda d: None,  # handled specially in native_value
-        precision=0,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    BeurerSensorDescription(
         key="measurement_time",
         translation_key="measurement_time",
         device_class=SensorDeviceClass.TIMESTAMP,
@@ -190,6 +182,20 @@ class BeurerScaleSensor(
                     else:
                         self._last_value = value
         return self._last_value
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        """Add user name as attribute on weight sensor."""
+        if self.entity_description.key != "weight":
+            return None
+        if self.coordinator.data is None:
+            return None
+        name = self.coordinator.user_name
+        if not name and self.coordinator.data:
+            name = self.coordinator.data.user_initials
+        if not name and self.coordinator.data and self.coordinator.data.user_id is not None:
+            name = f"User {self.coordinator.data.user_id}"
+        return {"user": name} if name else None
 
     @property
     def available(self) -> bool:
