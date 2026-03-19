@@ -38,6 +38,8 @@ from .const import (
     CHAR_CUSTOM_FFFF_USER_LIST,
     CHAR_CUSTOM_TAKE_MEASUREMENT,
     CHAR_DATABASE_CHANGE_INCREMENT,
+    CHAR_WEIGHT_SCALE_FEATURE,
+    CHAR_BODY_COMPOSITION_FEATURE,
     CHAR_USER_CONTROL_POINT,
     CHAR_WEIGHT_MEASUREMENT,
     MODEL_FAMILY_BF600,
@@ -247,11 +249,53 @@ async def _read_bf600(ctx: _ReadContext) -> None:
     except Exception as e:
         _LOGGER.debug("DatabaseChangeIncrement failed (non-critical): %s", e)
 
-    # Wait for data
+    # Wait for indication-based data (may not work via ESPHome proxy)
     try:
-        await asyncio.wait_for(ctx.event.wait(), timeout=15.0)
+        await asyncio.wait_for(ctx.event.wait(), timeout=10.0)
     except asyncio.TimeoutError:
-        _LOGGER.debug("Timeout waiting for scale data")
+        _LOGGER.debug("No indications received, trying direct reads...")
+
+    # Fallback: poll-read all readable custom FFFF characteristics
+    # ESPHome BLE proxy may not forward indications, but reads work
+    if not ctx.data.has_data():
+        await _poll_read_custom_chars(ctx)
+        await _poll_read_standard_chars(ctx)
+
+
+async def _poll_read_custom_chars(ctx: _ReadContext) -> None:
+    """Read custom FFFF service characteristics directly."""
+    client = ctx.client
+    # Read all chars in the 0xFFFF service
+    for char_short in [0x0000, 0x0001, 0x0002, 0x0004, 0x0005, 0x0006, 0x000B]:
+        char_uuid = f"{char_short:08x}-0000-1000-8000-00805f9b34fb"
+        try:
+            raw = await asyncio.wait_for(
+                client.read_gatt_char(char_uuid), timeout=3.0
+            )
+            _LOGGER.debug(
+                "Read FFFF/0x%04X (%d bytes): %s",
+                char_short, len(raw), raw.hex(),
+            )
+        except Exception as e:
+            _LOGGER.debug("Read FFFF/0x%04X failed: %s", char_short, e)
+
+
+async def _poll_read_standard_chars(ctx: _ReadContext) -> None:
+    """Read standard BLE characteristics directly."""
+    client = ctx.client
+    # Try reading Weight Scale Feature to understand capabilities
+    for name, uuid in [
+        ("WeightScaleFeature", CHAR_WEIGHT_SCALE_FEATURE),
+        ("BodyCompFeature", CHAR_BODY_COMPOSITION_FEATURE),
+        ("UserIndex", "00002a9a-0000-1000-8000-00805f9b34fb"),
+    ]:
+        try:
+            raw = await asyncio.wait_for(
+                client.read_gatt_char(str(uuid)), timeout=3.0
+            )
+            _LOGGER.debug("Read %s (%d bytes): %s", name, len(raw), raw.hex())
+        except Exception as e:
+            _LOGGER.debug("Read %s failed: %s", name, e)
 
 
 # ---------------------------------------------------------------------------
