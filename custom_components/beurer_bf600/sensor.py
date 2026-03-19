@@ -60,11 +60,10 @@ SENSOR_DESCRIPTIONS: tuple[BeurerSensorDescription, ...] = (
     BeurerSensorDescription(
         key="muscle_mass",
         translation_key="muscle_mass",
-        native_unit_of_measurement=UnitOfMass.KILOGRAMS,
+        native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:arm-flex",
-        value_fn=lambda d: d.muscle_mass_kg,
-        precision=2,
+        value_fn=lambda d: d.muscle_percent,
     ),
     BeurerSensorDescription(
         key="bone_mass",

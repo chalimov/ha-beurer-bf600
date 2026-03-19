@@ -66,7 +66,7 @@ class ScaleData:
     weight_kg: float | None = None
     body_fat_percent: float | None = None
     body_water_percent: float | None = None
-    muscle_mass_kg: float | None = None
+    muscle_percent: float | None = None
     bone_mass_kg: float | None = None
     bmi: float | None = None
     basal_metabolism: int | None = None
@@ -84,7 +84,7 @@ class ScaleData:
         """Merge non-None values from another ScaleData."""
         for attr in (
             "weight_kg", "body_fat_percent", "body_water_percent",
-            "muscle_mass_kg", "bone_mass_kg", "bmi", "basal_metabolism",
+            "muscle_percent", "bone_mass_kg", "bmi", "basal_metabolism",
             "impedance", "battery_level", "timestamp", "user_id",
         ):
             val = getattr(other, attr)
@@ -329,9 +329,10 @@ def _on_body_composition(
         muscle_pct = struct.unpack_from("<H", data, offset)[0] * 0.1
         offset += 2
 
+    muscle_mass_kg = None
     if flags & BCM_FLAG_MUSCLE_MASS and offset + 2 <= len(data):
         raw = struct.unpack_from("<H", data, offset)[0]
-        m.muscle_mass_kg = raw * (WEIGHT_RESOLUTION_LB * 0.453592 if flags & BCM_FLAG_IMPERIAL else WEIGHT_RESOLUTION_KG)
+        muscle_mass_kg = raw * (WEIGHT_RESOLUTION_LB * 0.453592 if flags & BCM_FLAG_IMPERIAL else WEIGHT_RESOLUTION_KG)
         offset += 2
 
     if flags & 0x0040 and offset + 2 <= len(data):  # Fat Free Mass flag
@@ -364,16 +365,15 @@ def _on_body_composition(
     elif water_kg is not None:
         m.body_water_percent = water_kg  # fallback: store raw
 
-    # Convert muscle percentage to mass if we got percentage but not mass
-    if m.muscle_mass_kg is None and muscle_pct is not None and muscle_pct > 0:
-        # Use weight from this packet or from merged context
-        w = m.weight_kg or (ctx.data.weight_kg if ctx.data else None)
-        if w and w > 0:
-            m.muscle_mass_kg = w * muscle_pct / 100.0
+    # Store muscle as percentage
+    if muscle_pct is not None and muscle_pct > 0:
+        m.muscle_percent = muscle_pct
+    elif muscle_mass_kg and m.weight_kg and m.weight_kg > 0:
+        m.muscle_percent = (muscle_mass_kg / m.weight_kg) * 100
 
     _LOGGER.debug(
-        "Body composition: fat=%.1f%%, water=%.1f%%, muscle=%.3fkg",
-        m.body_fat_percent or 0, m.body_water_percent or 0, m.muscle_mass_kg or 0,
+        "Body composition: fat=%.1f%%, water=%.1f%%, muscle=%.1f%%",
+        m.body_fat_percent or 0, m.body_water_percent or 0, m.muscle_percent or 0,
     )
 
     if m.user_id is not None and m.user_id != ctx.user_index:
@@ -455,15 +455,15 @@ def _on_ffe1_notification(
     m.body_water_percent = struct.unpack(">H", payload[10:12])[0] / 10.0
 
     muscle_pct = struct.unpack(">H", payload[12:14])[0] / 10.0
-    if m.weight_kg and m.weight_kg > 0:
-        m.muscle_mass_kg = m.weight_kg * muscle_pct / 100.0
+    if muscle_pct > 0:
+        m.muscle_percent = muscle_pct
 
     m.bone_mass_kg = struct.unpack(">H", payload[14:16])[0] * 50.0 / 1000.0
 
     _LOGGER.debug(
-        "FFE1 measurement: w=%.2fkg fat=%.1f%% water=%.1f%% muscle=%.2fkg bone=%.2fkg",
+        "FFE1 measurement: w=%.2fkg fat=%.1f%% water=%.1f%% muscle=%.1f%% bone=%.2fkg",
         m.weight_kg, m.body_fat_percent, m.body_water_percent,
-        m.muscle_mass_kg or 0, m.bone_mass_kg,
+        m.muscle_percent or 0, m.bone_mass_kg,
     )
 
     if m.weight_kg and m.weight_kg > 0:
