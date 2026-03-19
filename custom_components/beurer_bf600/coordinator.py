@@ -135,7 +135,10 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
                     dangerous_use_bleak_cache=True,
                 )
             except Exception as err:
-                _LOGGER.debug("Connection to %s failed: %s: %s", self._address, type(err).__name__, err)
+                _LOGGER.debug(
+                    "Connection to %s failed: %s: %s",
+                    self._address, type(err).__name__, err,
+                )
                 return
 
             self._client = client
