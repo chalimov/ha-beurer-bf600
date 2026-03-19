@@ -21,8 +21,16 @@
   "options": {
     "step": {
       "init": {
+        "title": "Settings for {name}",
+        "description": "Set your name and optionally re-pair with the scale.",
+        "data": {
+          "user_name": "Your name",
+          "repair": "Re-pair with scale"
+        }
+      },
+      "wake_scale": {
         "title": "Pair with {name}",
-        "description": "Step on the scale to wake it up, then click Submit. The integration will connect and initiate pairing."
+        "description": "Step on the scale to wake it up, then click Submit."
       },
       "enter_pin": {
         "title": "Enter PIN from scale display",
@@ -49,6 +57,7 @@
       "bmi": { "name": "BMI" },
       "basal_metabolism": { "name": "Basal metabolism" },
       "impedance": { "name": "Impedance" },
+      "user": { "name": "User" },
       "measurement_time": { "name": "Last measurement" },
       "battery": { "name": "Battery" }
     },

@@ -31,6 +31,7 @@ from .const import (
     CONF_CONSENT_CODE,
     CONF_MODEL_FAMILY,
     CONF_USER_INDEX,
+    CONF_USER_NAME,
     DEVICE_NAME_PATTERNS,
     DOMAIN,
     MODEL_FAMILY_BF600,
@@ -181,12 +182,44 @@ class BeurerScalePairFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Step 1: Ask user to wake the scale."""
+        """Main options step: edit user name or start re-pairing."""
+        if user_input is not None:
+            # Save user name
+            user_name = user_input.get(CONF_USER_NAME, "").strip()
+            new_data = {**self.config_entry.data}
+            new_data[CONF_USER_NAME] = user_name
+            self.hass.config_entries.async_update_entry(
+                self.config_entry, data=new_data
+            )
+
+            # If re-pair requested, go to pairing flow
+            if user_input.get("repair", False):
+                return await self.async_step_wake_scale()
+
+            await self.hass.config_entries.async_reload(self.config_entry.entry_id)
+            return self.async_create_entry(data={})
+
+        current_name = self.config_entry.data.get(CONF_USER_NAME, "")
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_USER_NAME, default=current_name): str,
+                    vol.Optional("repair", default=False): bool,
+                }
+            ),
+            description_placeholders={"name": self._name},
+        )
+
+    async def async_step_wake_scale(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Pairing step 1: Ask user to wake the scale."""
         if user_input is not None:
             return await self.async_step_pairing()
 
         return self.async_show_form(
-            step_id="init",
+            step_id="wake_scale",
             data_schema=vol.Schema({}),
             description_placeholders={"name": self._name},
         )
@@ -203,7 +236,7 @@ class BeurerScalePairFlow(OptionsFlow):
         if device is None:
             errors["base"] = "scale_not_found"
             return self.async_show_form(
-                step_id="init",
+                step_id="wake_scale",
                 data_schema=vol.Schema({}),
                 errors=errors,
                 description_placeholders={"name": self._name},
@@ -221,7 +254,7 @@ class BeurerScalePairFlow(OptionsFlow):
             _LOGGER.error("Connection failed: %s", err)
             errors["base"] = "connection_failed"
             return self.async_show_form(
-                step_id="init", data_schema=vol.Schema({}), errors=errors,
+                step_id="wake_scale", data_schema=vol.Schema({}), errors=errors,
                 description_placeholders={"name": self._name},
             )
 
@@ -295,6 +328,7 @@ class BeurerScalePairFlow(OptionsFlow):
         if user_input is not None:
             pin = int(user_input.get("pin", 0))
             user_index = int(user_input.get(CONF_USER_INDEX, 1))
+            user_name = user_input.get(CONF_USER_NAME, "").strip()
 
             # Verify the consent code works
             verified = await self._verify_consent(user_index, pin)
@@ -303,6 +337,7 @@ class BeurerScalePairFlow(OptionsFlow):
                 new_data = {**self.config_entry.data}
                 new_data[CONF_USER_INDEX] = user_index
                 new_data[CONF_CONSENT_CODE] = pin
+                new_data[CONF_USER_NAME] = user_name
                 self.hass.config_entries.async_update_entry(
                     self.config_entry, data=new_data
                 )
@@ -328,6 +363,7 @@ class BeurerScalePairFlow(OptionsFlow):
                     vol.Required("pin"): vol.All(
                         vol.Coerce(int), vol.Range(min=0, max=999999)
                     ),
+                    vol.Optional(CONF_USER_NAME, default=""): str,
                 }
             ),
             errors=errors,

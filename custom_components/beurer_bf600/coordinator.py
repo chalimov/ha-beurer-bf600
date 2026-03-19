@@ -26,6 +26,7 @@ from .const import (
     CONF_CONSENT_CODE,
     CONF_MODEL_FAMILY,
     CONF_USER_INDEX,
+    CONF_USER_NAME,
     DOMAIN,
     MODEL_FAMILY_BF600,
     RECONNECT_INTERVAL,
@@ -57,6 +58,7 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
         self._model_family: str = entry.data.get(CONF_MODEL_FAMILY, MODEL_FAMILY_BF600)
         self._user_index: int = entry.data.get(CONF_USER_INDEX, 1)
         self._consent_code: int = entry.data.get(CONF_CONSENT_CODE, 0)
+        self._user_name: str = entry.data.get(CONF_USER_NAME, "")
         self._client: BleakClient | None = None
         self._connect_lock = asyncio.Lock()
         self._connected = False
@@ -77,6 +79,11 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
     def device_name(self) -> str:
         """Return the device name."""
         return self._name
+
+    @property
+    def user_name(self) -> str:
+        """Return the configured user name."""
+        return self._user_name
 
     @callback
     def handle_bluetooth_event(

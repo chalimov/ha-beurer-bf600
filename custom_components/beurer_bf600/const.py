@@ -95,3 +95,4 @@ BCM_FLAG_MULTIPLE_PACKET = 0x1000
 CONF_USER_INDEX = "user_index"
 CONF_MODEL_FAMILY = "model_family"
 CONF_CONSENT_CODE = "consent_code"
+CONF_USER_NAME = "user_name"

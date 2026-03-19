@@ -95,6 +95,14 @@ SENSOR_DESCRIPTIONS: tuple[BeurerSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     BeurerSensorDescription(
+        key="user",
+        translation_key="user",
+        icon="mdi:account",
+        value_fn=lambda d: None,  # handled specially in native_value
+        precision=0,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    BeurerSensorDescription(
         key="measurement_time",
         translation_key="measurement_time",
         device_class=SensorDeviceClass.TIMESTAMP,
@@ -165,12 +173,20 @@ class BeurerScaleSensor(
     def native_value(self):
         """Return the sensor value. Keeps last known value when scale is off."""
         if self.coordinator.data is not None and self.coordinator.data.has_data():
-            value = self.entity_description.value_fn(self.coordinator.data)
-            if value is not None:
-                if isinstance(value, (int, float)):
-                    self._last_value = round(value, self.entity_description.precision)
-                else:
-                    self._last_value = value
+            # Special case: user sensor pulls name from coordinator config
+            if self.entity_description.key == "user":
+                name = self.coordinator.user_name
+                if name:
+                    self._last_value = name
+                elif self.coordinator.data.user_id is not None:
+                    self._last_value = f"User {self.coordinator.data.user_id}"
+            else:
+                value = self.entity_description.value_fn(self.coordinator.data)
+                if value is not None:
+                    if isinstance(value, (int, float)):
+                        self._last_value = round(value, self.entity_description.precision)
+                    else:
+                        self._last_value = value
         return self._last_value
 
     @property
