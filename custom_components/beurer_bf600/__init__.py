@@ -45,17 +45,19 @@ def _patch_esphome_uuid_parser() -> None:
         except (IndexError, AttributeError, TypeError):
             # Fallback: try to reconstruct from whatever data is available
             uuid_list = getattr(value, "uuid", None) or []
+            short = getattr(value, "short_uuid", 0)
+            _LOGGER.debug(
+                "UUID parse fallback: short_uuid=%s, uuid=%s",
+                short, uuid_list,
+            )
             if len(uuid_list) == 2:
                 high, low = uuid_list
                 from uuid import UUID as _UUID
                 return str(_UUID(int=(high << 64) | low))
             if len(uuid_list) == 1:
                 return f"{uuid_list[0]:08x}-0000-1000-8000-00805f9b34fb"
-            short = getattr(value, "short_uuid", 0)
-            if short:
-                return f"{short:08x}-0000-1000-8000-00805f9b34fb"
-            _LOGGER.debug("Could not parse BLE UUID, fields: uuid=%s short_uuid=%s",
-                          uuid_list, getattr(value, "short_uuid", "N/A"))
+            # short_uuid=0 with empty uuid list means the ESPHome proxy
+            # couldn't parse this UUID. Return zero UUID as short BLE UUID.
             return "00000000-0000-1000-8000-00805f9b34fb"
 
     _esphome_model._convert_bluetooth_uuid = _safe_convert_bluetooth_uuid

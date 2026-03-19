@@ -38,8 +38,6 @@ from .const import (
     CHAR_CUSTOM_FFFF_USER_LIST,
     CHAR_CUSTOM_TAKE_MEASUREMENT,
     CHAR_DATABASE_CHANGE_INCREMENT,
-    CHAR_WEIGHT_SCALE_FEATURE,
-    CHAR_BODY_COMPOSITION_FEATURE,
     CHAR_USER_CONTROL_POINT,
     CHAR_WEIGHT_MEASUREMENT,
     MODEL_FAMILY_BF600,
@@ -150,152 +148,61 @@ class _ReadContext:
 # ---------------------------------------------------------------------------
 
 async def _read_bf600(ctx: _ReadContext) -> None:
-    """Read using standard BLE Weight Scale / Body Composition services."""
+    """Read using standard BLE Weight Scale / Body Composition services.
+
+    Protocol sequence for BF105/SBF73 variant (0xFFFF custom service):
+    1. Subscribe to all notification/indication characteristics
+    2. Send UCP consent
+    3. Write current time
+    4. Trigger custom service user list + measurement
+    5. Wait for data (indications or notifications)
+    """
     client = ctx.client
 
-    # Subscribe to indications
-    try:
-        await client.start_notify(
-            CHAR_WEIGHT_MEASUREMENT,
-            lambda c, d: _on_weight_measurement(ctx, c, d),
-        )
-        _LOGGER.debug("Subscribed to Weight Measurement (0x2A9D)")
-    except Exception as e:
-        _LOGGER.debug("Weight Measurement unavailable: %s", e)
+    # Subscribe to ALL notify/indicate characteristics
+    subs = [
+        (CHAR_WEIGHT_MEASUREMENT, "Weight(0x2A9D)", _on_weight_measurement),
+        (CHAR_BODY_COMPOSITION_MEASUREMENT, "BodyComp(0x2A9C)", _on_body_composition),
+        (CHAR_USER_CONTROL_POINT, "UCP(0x2A9F)", _on_ucp_response),
+        (CHAR_CUSTOM_FFFF_USER_LIST, "FFFF/UserList(0x0001)", _on_custom_notification),
+        (CHAR_CUSTOM_FFFF_MEASURE_REQ, "FFFF/Measure(0x0006)", _on_custom_notification),
+    ]
+    for char_uuid, name, handler in subs:
+        try:
+            await client.start_notify(char_uuid, lambda c, d, h=handler: h(ctx, c, d))
+            _LOGGER.debug("Subscribed: %s", name)
+        except Exception as e:
+            _LOGGER.debug("Subscribe %s failed: %s", name, e)
 
+    # UCP consent
     try:
-        await client.start_notify(
-            CHAR_BODY_COMPOSITION_MEASUREMENT,
-            lambda c, d: _on_body_composition(ctx, c, d),
-        )
-        _LOGGER.debug("Subscribed to Body Composition Measurement (0x2A9C)")
-    except Exception as e:
-        _LOGGER.debug("Body Composition unavailable: %s", e)
-
-    # Consent for user index
-    try:
-        await client.start_notify(
-            CHAR_USER_CONTROL_POINT,
-            lambda c, d: _on_ucp_response(ctx, c, d),
-        )
         consent_cmd = struct.pack("<BBH", UCP_CONSENT, ctx.user_index, 0)
         await client.write_gatt_char(CHAR_USER_CONTROL_POINT, consent_cmd, response=True)
         _LOGGER.debug("UCP consent sent for user %d", ctx.user_index)
-        await asyncio.sleep(0.5)
     except Exception as e:
-        _LOGGER.debug("UCP consent unavailable: %s", e)
-
-    # Subscribe to custom service 0xFFFF (BF105/BF950/SBF73 variant)
-    # Do this BEFORE any slow operations to avoid scale disconnect
-    try:
-        await client.start_notify(
-            CHAR_CUSTOM_FFFF_USER_LIST,
-            lambda c, d: _on_custom_notification(ctx, c, d),
-        )
-        _LOGGER.debug("Subscribed to custom FFFF user list (0x0001)")
-    except Exception as e:
-        _LOGGER.debug("Custom FFFF user list unavailable: %s", e)
-
-    try:
-        await client.start_notify(
-            CHAR_CUSTOM_FFFF_MEASURE_REQ,
-            lambda c, d: _on_custom_notification(ctx, c, d),
-        )
-        _LOGGER.debug("Subscribed to custom FFFF measure (0x0006)")
-    except Exception as e:
-        _LOGGER.debug("Custom FFFF measure unavailable: %s", e)
+        _LOGGER.debug("UCP consent write failed: %s", e)
 
     # Write current time
     await _write_current_time(client)
 
-    # Trigger user list query (openScale BF105 pattern)
-    try:
-        await client.write_gatt_char(
-            CHAR_CUSTOM_FFFF_USER_LIST, bytes([0x00]), response=True
-        )
-        _LOGGER.debug("Wrote 0x00 to custom user list")
-    except Exception as e:
-        _LOGGER.debug("Custom user list write failed: %s", e)
-
-    await asyncio.sleep(0.5)
-
-    # Request measurement via custom 0x0006 char
-    try:
-        await client.write_gatt_char(
-            CHAR_CUSTOM_FFFF_MEASURE_REQ, bytes([0x00]), response=True
-        )
-        _LOGGER.debug("Wrote 0x00 to custom measure request")
-    except Exception as e:
-        _LOGGER.debug("Custom measure request failed: %s", e)
-
-    # Try DatabaseChangeIncrement with short timeout (may timeout on ESPHome proxy)
-    try:
-        raw = await asyncio.wait_for(
-            client.read_gatt_char(CHAR_DATABASE_CHANGE_INCREMENT), timeout=5.0
-        )
-        if raw and len(raw) >= 4:
-            current = struct.unpack("<I", raw[:4])[0]
-        else:
-            current = 0
-        await asyncio.wait_for(
-            client.write_gatt_char(
-                CHAR_DATABASE_CHANGE_INCREMENT,
-                struct.pack("<I", current + 1),
-                response=True,
-            ),
-            timeout=5.0,
-        )
-        _LOGGER.debug("DatabaseChangeIncrement updated to %d", current + 1)
-    except Exception as e:
-        _LOGGER.debug("DatabaseChangeIncrement failed (non-critical): %s", e)
-
-    # Wait for indication-based data (may not work via ESPHome proxy)
-    try:
-        await asyncio.wait_for(ctx.event.wait(), timeout=10.0)
-    except asyncio.TimeoutError:
-        _LOGGER.debug("No indications received, trying direct reads...")
-
-    # Fallback: poll-read all readable custom FFFF characteristics
-    # ESPHome BLE proxy may not forward indications, but reads work
-    if not ctx.data.has_data():
-        await _poll_read_custom_chars(ctx)
-        await _poll_read_standard_chars(ctx)
-
-
-async def _poll_read_custom_chars(ctx: _ReadContext) -> None:
-    """Read custom FFFF service characteristics directly."""
-    client = ctx.client
-    # Read all chars in the 0xFFFF service
-    for char_short in [0x0000, 0x0001, 0x0002, 0x0004, 0x0005, 0x0006, 0x000B]:
-        char_uuid = f"{char_short:08x}-0000-1000-8000-00805f9b34fb"
-        try:
-            raw = await asyncio.wait_for(
-                client.read_gatt_char(char_uuid), timeout=3.0
-            )
-            _LOGGER.debug(
-                "Read FFFF/0x%04X (%d bytes): %s",
-                char_short, len(raw), raw.hex(),
-            )
-        except Exception as e:
-            _LOGGER.debug("Read FFFF/0x%04X failed: %s", char_short, e)
-
-
-async def _poll_read_standard_chars(ctx: _ReadContext) -> None:
-    """Read standard BLE characteristics directly."""
-    client = ctx.client
-    # Try reading Weight Scale Feature to understand capabilities
-    for name, uuid in [
-        ("WeightScaleFeature", CHAR_WEIGHT_SCALE_FEATURE),
-        ("BodyCompFeature", CHAR_BODY_COMPOSITION_FEATURE),
-        ("UserIndex", "00002a9a-0000-1000-8000-00805f9b34fb"),
+    # Trigger custom FFFF user list + measurement (BF105/SBF73 pattern)
+    for char_uuid, name in [
+        (CHAR_CUSTOM_FFFF_USER_LIST, "FFFF/UserList"),
+        (CHAR_CUSTOM_FFFF_MEASURE_REQ, "FFFF/Measure"),
     ]:
         try:
-            raw = await asyncio.wait_for(
-                client.read_gatt_char(str(uuid)), timeout=3.0
-            )
-            _LOGGER.debug("Read %s (%d bytes): %s", name, len(raw), raw.hex())
+            await client.write_gatt_char(char_uuid, bytes([0x00]), response=True)
+            _LOGGER.debug("Wrote trigger to %s", name)
         except Exception as e:
-            _LOGGER.debug("Read %s failed: %s", name, e)
+            _LOGGER.debug("Write %s failed: %s", name, e)
+
+    # Wait for data — long timeout since scale may need time to measure
+    try:
+        await asyncio.wait_for(ctx.event.wait(), timeout=30.0)
+    except asyncio.TimeoutError:
+        _LOGGER.debug("Timeout: no measurement data received after 30s")
+
+
 
 
 # ---------------------------------------------------------------------------
