@@ -3,25 +3,40 @@
     "step": {
       "user": {
         "title": "Select Beurer/Sanitas Scale",
-        "description": "Select your Beurer or Sanitas body composition scale.",
+        "description": "Select your scale. After setup, use Configure to pair.",
         "data": {
-          "address": "Device",
-          "user_index": "User slot on scale (1-8)",
-          "consent_code": "Consent code (from Sanitas app, 0 for auto)"
+          "address": "Device"
         }
       },
       "bluetooth_confirm": {
-        "title": "Confirm Setup",
-        "description": "Set up {name}?",
-        "data": {
-          "user_index": "User slot on scale (1-8)",
-          "consent_code": "Consent code (from Sanitas app, 0 for auto)"
-        }
+        "title": "Found: {name}",
+        "description": "Add this scale? After setup, use Configure to pair."
       }
     },
     "abort": {
       "already_configured": "Device is already configured",
-      "no_devices_found": "No supported scales found. Make sure your scale is powered on and in range."
+      "no_devices_found": "No supported scales found. Make sure your scale is powered on."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Pair with {name}",
+        "description": "Step on the scale to wake it up, then click Submit. The integration will connect and initiate pairing."
+      },
+      "enter_pin": {
+        "title": "Enter PIN from scale display",
+        "description": "Pairing status: {pair_result}\nUsers on scale: {users}\n\nSelect your user and enter the PIN code shown on the scale display.",
+        "data": {
+          "user_index": "Your user on the scale",
+          "pin": "PIN code (shown on scale display)"
+        }
+      }
+    },
+    "error": {
+      "scale_not_found": "Scale not found. Step on the scale and try again.",
+      "connection_failed": "Connection failed. Make sure the scale is awake and try again.",
+      "consent_rejected": "PIN rejected by scale. Check the PIN and try again."
     }
   },
   "entity": {
