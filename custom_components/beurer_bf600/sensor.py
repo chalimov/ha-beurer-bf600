@@ -173,13 +173,15 @@ class BeurerScaleSensor(
     def native_value(self):
         """Return the sensor value. Keeps last known value when scale is off."""
         if self.coordinator.data is not None and self.coordinator.data.has_data():
-            # Special case: user sensor pulls name from coordinator config
+            # Special case: user sensor shows name/initials
             if self.entity_description.key == "user":
                 name = self.coordinator.user_name
+                if not name:
+                    name = self.coordinator.data.user_initials
+                if not name and self.coordinator.data.user_id is not None:
+                    name = f"User {self.coordinator.data.user_id}"
                 if name:
                     self._last_value = name
-                elif self.coordinator.data.user_id is not None:
-                    self._last_value = f"User {self.coordinator.data.user_id}"
             else:
                 value = self.entity_description.value_fn(self.coordinator.data)
                 if value is not None:

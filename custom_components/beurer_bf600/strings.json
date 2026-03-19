@@ -22,9 +22,9 @@
     "step": {
       "init": {
         "title": "Settings for {name}",
-        "description": "Set your name and optionally re-pair with the scale.",
+        "description": "Optionally set a full name (overrides initials from scale).",
         "data": {
-          "user_name": "Your name",
+          "user_name": "Full name (leave empty to use initials from scale)",
           "repair": "Re-pair with scale"
         }
       },

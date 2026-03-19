@@ -74,6 +74,7 @@ class ScaleData:
     battery_level: int | None = None
     timestamp: datetime.datetime | None = None
     user_id: int | None = None
+    user_initials: str | None = None
     connected: bool = False
 
     def has_data(self) -> bool:
@@ -85,7 +86,7 @@ class ScaleData:
         for attr in (
             "weight_kg", "body_fat_percent", "body_water_percent",
             "muscle_percent", "bone_mass_kg", "bmi", "basal_metabolism",
-            "impedance", "battery_level", "timestamp", "user_id",
+            "impedance", "battery_level", "timestamp", "user_id", "user_initials",
         ):
             val = getattr(other, attr)
             if val is not None:
@@ -395,6 +396,13 @@ def _on_custom_notification(
         "Custom FFFF notification: char=%s len=%d data=%s",
         _char.uuid, len(data), data.hex(),
     )
+    # Parse user list entries to extract initials for our user
+    if str(_char.uuid).startswith("00000001") and len(data) >= 12 and data[0] == 0x00:
+        idx = data[1]
+        initials = data[2:5].decode("ascii", errors="replace").strip()
+        if idx == ctx.user_index:
+            ctx.data.user_initials = initials
+            _LOGGER.debug("Matched user %d initials: %s", idx, initials)
 
 
 def _on_ucp_response(
