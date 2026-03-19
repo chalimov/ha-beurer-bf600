@@ -19,6 +19,12 @@ PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR, Platform.SWITCH]
 
 _PATCHED = False
 
+# Pre-import at module level to avoid blocking call inside event loop
+try:
+    import aioesphomeapi.model as _esphome_model
+except ImportError:
+    _esphome_model = None
+
 
 def _patch_esphome_uuid_parser() -> None:
     """Monkey-patch aioesphomeapi to handle malformed BLE UUIDs.
@@ -28,39 +34,33 @@ def _patch_esphome_uuid_parser() -> None:
     This patch makes _convert_bluetooth_uuid resilient to such cases.
     """
     global _PATCHED
-    if _PATCHED:
+    if _PATCHED or _esphome_model is None:
         return
 
-    try:
-        import aioesphomeapi.model as model
+    _original = _esphome_model._convert_bluetooth_uuid
 
-        _original = model._convert_bluetooth_uuid
+    def _safe_convert_bluetooth_uuid(value):
+        try:
+            return _original(value)
+        except (IndexError, AttributeError, TypeError):
+            # Fallback: try to reconstruct from whatever data is available
+            uuid_list = getattr(value, "uuid", None) or []
+            if len(uuid_list) == 2:
+                high, low = uuid_list
+                from uuid import UUID as _UUID
+                return str(_UUID(int=(high << 64) | low))
+            if len(uuid_list) == 1:
+                return f"{uuid_list[0]:08x}-0000-1000-8000-00805f9b34fb"
+            short = getattr(value, "short_uuid", 0)
+            if short:
+                return f"{short:08x}-0000-1000-8000-00805f9b34fb"
+            _LOGGER.debug("Could not parse BLE UUID, fields: uuid=%s short_uuid=%s",
+                          uuid_list, getattr(value, "short_uuid", "N/A"))
+            return "00000000-0000-1000-8000-00805f9b34fb"
 
-        def _safe_convert_bluetooth_uuid(value):
-            try:
-                return _original(value)
-            except (IndexError, AttributeError, TypeError):
-                # Fallback: try to reconstruct from whatever data is available
-                uuid_list = getattr(value, "uuid", None) or []
-                if len(uuid_list) == 2:
-                    high, low = uuid_list
-                    from uuid import UUID
-                    return str(UUID(int=(high << 64) | low))
-                if len(uuid_list) == 1:
-                    # Single value — treat as short UUID
-                    return f"{uuid_list[0]:08x}-0000-1000-8000-00805f9b34fb"
-                short = getattr(value, "short_uuid", 0)
-                if short:
-                    return f"{short:08x}-0000-1000-8000-00805f9b34fb"
-                # Last resort: return a placeholder UUID
-                _LOGGER.debug("Could not parse BLE UUID: %s, using placeholder", value)
-                return "00000000-0000-1000-8000-00805f9b34fb"
-
-        model._convert_bluetooth_uuid = _safe_convert_bluetooth_uuid
-        _PATCHED = True
-        _LOGGER.debug("Patched aioesphomeapi UUID parser for BLE proxy compatibility")
-    except ImportError:
-        pass  # aioesphomeapi not installed — direct BT adapter, no patch needed
+    _esphome_model._convert_bluetooth_uuid = _safe_convert_bluetooth_uuid
+    _PATCHED = True
+    _LOGGER.debug("Patched aioesphomeapi UUID parser for BLE proxy compatibility")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

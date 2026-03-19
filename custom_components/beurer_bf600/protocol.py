@@ -107,6 +107,8 @@ async def read_scale(
                 f"{c.uuid}({c.properties})" for c in service.characteristics
             )
             _LOGGER.debug("GATT service %s: %s", service.uuid, chars)
+    else:
+        _LOGGER.debug("No GATT services discovered (services=%s)", client.services)
 
     ctx = _ReadContext(client, user_index)
 
