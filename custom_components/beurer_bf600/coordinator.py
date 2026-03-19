@@ -2,13 +2,14 @@
 
 Uses push-based BLE connection: connects when the scale advertises
 (user steps on it), reads measurements, then disconnects.
+Persists last measurement to HA Store so values survive reboots.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from bleak import BleakClient
 from bleak.exc import BleakError
@@ -20,6 +21,7 @@ from homeassistant.components.bluetooth import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
@@ -35,6 +37,8 @@ from .protocol import ScaleData, read_scale
 
 _LOGGER = logging.getLogger(__name__)
 
+STORAGE_VERSION = 1
+
 
 class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
     """Coordinator that connects to the scale on BLE advertisement."""
@@ -46,7 +50,6 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
         address: str,
         name: str,
     ) -> None:
-        """Initialize the coordinator."""
         super().__init__(
             hass,
             _LOGGER,
@@ -64,26 +67,66 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
         self._connected = False
         self.enabled = True
         self._last_data: ScaleData | None = None
+        self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}_{address}")
 
     @property
     def connected(self) -> bool:
-        """Return whether the BLE device is connected."""
         return self._connected
 
     @property
     def address(self) -> str:
-        """Return the BLE address."""
         return self._address
 
     @property
     def device_name(self) -> str:
-        """Return the device name."""
         return self._name
 
     @property
     def user_name(self) -> str:
-        """Return the configured user name."""
         return self._user_name
+
+    async def async_load_stored_data(self) -> None:
+        """Load last measurement from persistent storage."""
+        stored = await self._store.async_load()
+        if stored and isinstance(stored, dict):
+            data = ScaleData()
+            data.weight_kg = stored.get("weight_kg")
+            data.body_fat_percent = stored.get("body_fat_percent")
+            data.body_water_percent = stored.get("body_water_percent")
+            data.muscle_percent = stored.get("muscle_percent")
+            data.bone_mass_kg = stored.get("bone_mass_kg")
+            data.bmi = stored.get("bmi")
+            data.basal_metabolism = stored.get("basal_metabolism")
+            data.impedance = stored.get("impedance")
+            data.battery_level = stored.get("battery_level")
+            data.user_id = stored.get("user_id")
+            data.user_initials = stored.get("user_initials")
+            ts = stored.get("timestamp")
+            if ts:
+                try:
+                    data.timestamp = datetime.fromisoformat(ts)
+                except (ValueError, TypeError):
+                    pass
+            if data.has_data():
+                self._last_data = data
+                _LOGGER.debug("Restored stored data: weight=%.2f", data.weight_kg or 0)
+
+    async def _save_data(self, data: ScaleData) -> None:
+        """Save measurement to persistent storage."""
+        await self._store.async_save({
+            "weight_kg": data.weight_kg,
+            "body_fat_percent": data.body_fat_percent,
+            "body_water_percent": data.body_water_percent,
+            "muscle_percent": data.muscle_percent,
+            "bone_mass_kg": data.bone_mass_kg,
+            "bmi": data.bmi,
+            "basal_metabolism": data.basal_metabolism,
+            "impedance": data.impedance,
+            "battery_level": data.battery_level,
+            "user_id": data.user_id,
+            "user_initials": data.user_initials,
+            "timestamp": data.timestamp.isoformat() if data.timestamp else None,
+        })
 
     @callback
     def handle_bluetooth_event(
@@ -91,18 +134,12 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
         service_info: BluetoothServiceInfoBleak,
         change: object,
     ) -> None:
-        """Handle a BLE advertisement from the scale.
-
-        When the scale advertises, it means someone stepped on it or
-        it has data ready. Trigger a connection attempt.
-        """
         if not self.enabled:
             return
         _LOGGER.debug("BLE advertisement from %s, triggering connection", self._address)
         self.hass.async_create_task(self._connect())
 
     async def _async_update_data(self) -> ScaleData:
-        """Periodic fallback: attempt connection if not connected."""
         if not self.enabled:
             return self._last_data or ScaleData()
 
@@ -115,7 +152,6 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
         return self._last_data or ScaleData()
 
     async def _connect(self) -> None:
-        """Connect to the scale, read data, disconnect."""
         if self._connect_lock.locked() or not self.enabled:
             return
 
@@ -173,6 +209,7 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
                 if data.has_data():
                     self._last_data = data
                     self.async_set_updated_data(data)
+                    self.hass.async_create_task(self._save_data(data))
                     _LOGGER.debug("Scale data: %s", data)
             except Exception:
                 _LOGGER.exception("Error reading scale %s", self._address)
@@ -185,13 +222,11 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
                 self._connected = False
 
     def _on_disconnect(self, _client: BleakClient) -> None:
-        """Handle unexpected BLE disconnection."""
         self._connected = False
         self._client = None
         _LOGGER.debug("Scale %s disconnected", self._address)
 
     async def async_disconnect(self) -> None:
-        """Disconnect from the scale."""
         self.enabled = False
         if self._client and self._client.is_connected:
             try:
@@ -202,6 +237,5 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
         self._connected = False
 
     async def async_request_connect(self) -> None:
-        """Request a connection attempt (called by switch entity)."""
         self.enabled = True
         await self._connect()

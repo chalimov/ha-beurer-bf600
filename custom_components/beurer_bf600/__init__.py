@@ -74,6 +74,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     coordinator = BeurerScaleCoordinator(hass, entry, address, name)
 
+    # Load last measurement from persistent storage
+    await coordinator.async_load_stored_data()
+    if coordinator._last_data and coordinator._last_data.has_data():
+        coordinator.async_set_updated_data(coordinator._last_data)
+
     # Register BLE advertisement callback to trigger connections
     entry.async_on_unload(
         bluetooth.async_register_callback(
