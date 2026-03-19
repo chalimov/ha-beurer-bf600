@@ -200,6 +200,16 @@ class BeurerScalePairFlow(OptionsFlow):
             return self.async_create_entry(data={})
 
         current_name = self.config_entry.data.get(CONF_USER_NAME, "")
+
+        # Get current user info from coordinator
+        coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        user_idx = self.config_entry.data.get(CONF_USER_INDEX, 0)
+        initials = "?"
+        if coordinator and coordinator.data and coordinator.data.user_initials:
+            initials = coordinator.data.user_initials
+        elif user_idx > 0:
+            initials = f"User {user_idx}"
+
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -208,7 +218,11 @@ class BeurerScalePairFlow(OptionsFlow):
                     vol.Optional("repair", default=False): bool,
                 }
             ),
-            description_placeholders={"name": self._name},
+            description_placeholders={
+                "name": self._name,
+                "initials": initials,
+                "user_index": str(user_idx),
+            },
         )
 
     async def async_step_wake_scale(
