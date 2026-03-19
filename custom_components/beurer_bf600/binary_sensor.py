@@ -32,7 +32,11 @@ async def async_setup_entry(
 class ConnectionStatusSensor(
     CoordinatorEntity[BeurerScaleCoordinator], BinarySensorEntity
 ):
-    """Binary sensor showing BLE connection status."""
+    """Binary sensor showing whether the scale has synced data.
+
+    ON = scale has sent measurement data (sensors are populated)
+    OFF = no data received yet
+    """
 
     _attr_has_entity_name = True
     _attr_translation_key = "connected"
@@ -58,10 +62,13 @@ class ConnectionStatusSensor(
 
     @property
     def is_on(self) -> bool:
-        """Return True if connected."""
-        return self.coordinator.connected
+        """Return True if we have received data from the scale."""
+        return (
+            self.coordinator.data is not None
+            and self.coordinator.data.has_data()
+        )
 
     @property
     def available(self) -> bool:
-        """Always available so we can show disconnected state."""
+        """Always available so we can show the state."""
         return True

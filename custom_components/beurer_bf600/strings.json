@@ -52,7 +52,7 @@
       "battery": { "name": "Battery" }
     },
     "binary_sensor": {
-      "connected": { "name": "Connected" }
+      "connected": { "name": "Data synced" }
     },
     "switch": {
       "connection": { "name": "BLE connection" }

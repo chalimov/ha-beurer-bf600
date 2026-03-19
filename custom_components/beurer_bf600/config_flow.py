@@ -293,8 +293,8 @@ class BeurerScalePairFlow(OptionsFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            pin = user_input.get("pin", 0)
-            user_index = user_input.get(CONF_USER_INDEX, 1)
+            pin = int(user_input.get("pin", 0))
+            user_index = int(user_input.get(CONF_USER_INDEX, 1))
 
             # Verify the consent code works
             verified = await self._verify_consent(user_index, pin)
@@ -311,13 +311,14 @@ class BeurerScalePairFlow(OptionsFlow):
             else:
                 errors["base"] = "consent_rejected"
 
-        # Build user selection if we have users
-        user_options = {
-            str(u["index"]): f"User {u['index']}: {u['initials']} ({u['height']}cm)"
-            for u in self._user_list
-        }
-        if not user_options:
-            user_options = {"1": "User 1"}
+        # Build user selection: known users + all possible slots (1-8)
+        user_options = {}
+        for u in self._user_list:
+            user_options[str(u["index"])] = f"User {u['index']}: {u['initials']} ({u['height']}cm)"
+        # Add unoccupied slots (scale supports up to 8)
+        for i in range(1, 9):
+            if str(i) not in user_options:
+                user_options[str(i)] = f"User {i}: (new slot)"
 
         return self.async_show_form(
             step_id="enter_pin",
