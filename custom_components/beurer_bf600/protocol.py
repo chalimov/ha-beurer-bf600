@@ -269,7 +269,7 @@ def _on_weight_measurement(
         hour, minute, second = data[offset + 4], data[offset + 5], data[offset + 6]
         offset += 7
         try:
-            m.timestamp = datetime.datetime(year, month, day, hour, minute, second)
+            m.timestamp = datetime.datetime(year, month, day, hour, minute, second, tzinfo=datetime.timezone.utc)
         except ValueError:
             pass
 
@@ -312,7 +312,7 @@ def _on_body_composition(
         hour, minute, second = data[offset + 4], data[offset + 5], data[offset + 6]
         offset += 7
         try:
-            m.timestamp = datetime.datetime(year, month, day, hour, minute, second)
+            m.timestamp = datetime.datetime(year, month, day, hour, minute, second, tzinfo=datetime.timezone.utc)
         except ValueError:
             pass
 

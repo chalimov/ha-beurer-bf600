@@ -99,7 +99,7 @@ SENSOR_DESCRIPTIONS: tuple[BeurerSensorDescription, ...] = (
         translation_key="measurement_time",
         device_class=SensorDeviceClass.TIMESTAMP,
         icon="mdi:clock-outline",
-        value_fn=lambda d: d.timestamp.isoformat() if d.timestamp else None,
+        value_fn=lambda d: d.timestamp if d.timestamp else None,
         precision=0,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
@@ -167,10 +167,10 @@ class BeurerScaleSensor(
         if self.coordinator.data is not None and self.coordinator.data.has_data():
             value = self.entity_description.value_fn(self.coordinator.data)
             if value is not None:
-                if isinstance(value, str):
-                    self._last_value = value
-                else:
+                if isinstance(value, (int, float)):
                     self._last_value = round(value, self.entity_description.precision)
+                else:
+                    self._last_value = value
         return self._last_value
 
     @property
