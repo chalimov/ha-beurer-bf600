@@ -13,6 +13,7 @@ from datetime import timedelta
 from bleak import BleakClient
 from bleak.exc import BleakError
 from bleak_retry_connector import establish_connection
+from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth import (
     BluetoothServiceInfoBleak,
     async_ble_device_from_address,
@@ -94,12 +95,13 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
     async def _async_update_data(self) -> ScaleData:
         """Periodic fallback: attempt connection if not connected."""
         if not self.enabled:
-            if self._last_data:
-                return self._last_data
-            return ScaleData()
+            return self._last_data or ScaleData()
 
         if not self._connected:
-            await self._connect()
+            try:
+                await self._connect()
+            except Exception as err:
+                _LOGGER.debug("Periodic connect failed: %s: %s", type(err).__name__, err)
 
         return self._last_data or ScaleData()
 
@@ -116,6 +118,11 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
                 _LOGGER.debug("Scale %s not available", self._address)
                 return
 
+            def _ble_device_callback():
+                return async_ble_device_from_address(
+                    self.hass, self._address, connectable=True
+                ) or device
+
             try:
                 client = await establish_connection(
                     BleakClient,
@@ -123,9 +130,12 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
                     self._address,
                     disconnected_callback=self._on_disconnect,
                     max_attempts=2,
+                    ble_device_callback=_ble_device_callback,
+                    use_services_cache=True,
+                    dangerous_use_bleak_cache=True,
                 )
-            except (BleakError, TimeoutError) as err:
-                _LOGGER.debug("Connection to %s failed: %s", self._address, err)
+            except Exception as err:
+                _LOGGER.debug("Connection to %s failed: %s: %s", self._address, type(err).__name__, err)
                 return
 
             self._client = client
