@@ -95,6 +95,14 @@ SENSOR_DESCRIPTIONS: tuple[BeurerSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     BeurerSensorDescription(
+        key="user",
+        translation_key="user",
+        icon="mdi:account",
+        value_fn=lambda d: None,  # handled specially in native_value
+        precision=-1,  # -1 = not numeric, skip display_precision
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    BeurerSensorDescription(
         key="measurement_time",
         translation_key="measurement_time",
         device_class=SensorDeviceClass.TIMESTAMP,
@@ -152,7 +160,8 @@ class BeurerScaleSensor(
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{address}_{description.key}"
-        self._attr_suggested_display_precision = description.precision
+        if description.precision >= 0:
+            self._attr_suggested_display_precision = description.precision
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, address)},
             name=name,
