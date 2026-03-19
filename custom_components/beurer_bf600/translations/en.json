@@ -6,14 +6,16 @@
         "description": "Select your Beurer or Sanitas body composition scale.",
         "data": {
           "address": "Device",
-          "user_index": "User slot on scale (1-8)"
+          "user_index": "User slot on scale (1-8)",
+          "consent_code": "Consent code (from Sanitas app, 0 for auto)"
         }
       },
       "bluetooth_confirm": {
         "title": "Confirm Setup",
         "description": "Set up {name}?",
         "data": {
-          "user_index": "User slot on scale (1-8)"
+          "user_index": "User slot on scale (1-8)",
+          "consent_code": "Consent code (from Sanitas app, 0 for auto)"
         }
       }
     },

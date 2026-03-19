@@ -100,6 +100,7 @@ async def read_scale(
     client: BleakClient,
     model_family: str = MODEL_FAMILY_BF600,
     user_index: int = 1,
+    consent_code: int = 0,
 ) -> ScaleData:
     """Connect to a scale and read all available measurement data."""
     # Log discovered GATT services for diagnostics
@@ -112,7 +113,7 @@ async def read_scale(
     else:
         _LOGGER.debug("No GATT services discovered (services=%s)", client.services)
 
-    ctx = _ReadContext(client, user_index)
+    ctx = _ReadContext(client, user_index, consent_code=consent_code)
 
     if model_family == MODEL_FAMILY_BF700:
         await _read_bf700(ctx)
@@ -139,6 +140,7 @@ async def read_scale(
 class _ReadContext:
     client: BleakClient
     user_index: int
+    consent_code: int = 0
     data: ScaleData = field(default_factory=ScaleData)
     event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -176,7 +178,7 @@ async def _read_bf600(ctx: _ReadContext) -> None:
 
     # UCP consent
     try:
-        consent_cmd = struct.pack("<BBH", UCP_CONSENT, ctx.user_index, 0)
+        consent_cmd = struct.pack("<BBH", UCP_CONSENT, ctx.user_index, ctx.consent_code)
         await client.write_gatt_char(CHAR_USER_CONTROL_POINT, consent_cmd, response=True)
         _LOGGER.debug("UCP consent sent for user %d", ctx.user_index)
     except Exception as e:

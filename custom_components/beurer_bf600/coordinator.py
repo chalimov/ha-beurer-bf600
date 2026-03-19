@@ -23,6 +23,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
+    CONF_CONSENT_CODE,
     CONF_MODEL_FAMILY,
     CONF_USER_INDEX,
     DOMAIN,
@@ -55,6 +56,7 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
         self._name = name
         self._model_family: str = entry.data.get(CONF_MODEL_FAMILY, MODEL_FAMILY_BF600)
         self._user_index: int = entry.data.get(CONF_USER_INDEX, 1)
+        self._consent_code: int = entry.data.get(CONF_CONSENT_CODE, 0)
         self._client: BleakClient | None = None
         self._connect_lock = asyncio.Lock()
         self._connected = False
@@ -159,6 +161,7 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
                     client,
                     model_family=self._model_family,
                     user_index=self._user_index,
+                    consent_code=self._consent_code,
                 )
                 if data.has_data():
                     self._last_data = data

@@ -14,6 +14,7 @@ from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 
 from .const import (
+    CONF_CONSENT_CODE,
     CONF_MODEL_FAMILY,
     CONF_USER_INDEX,
     DEVICE_NAME_PATTERNS,
@@ -92,6 +93,7 @@ class BeurerScaleConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_NAME: name,
                     CONF_MODEL_FAMILY: _detect_model_family(name),
                     CONF_USER_INDEX: user_input.get(CONF_USER_INDEX, 1),
+                    CONF_CONSENT_CODE: user_input.get(CONF_CONSENT_CODE, 0),
                 },
             )
 
@@ -102,6 +104,9 @@ class BeurerScaleConfigFlow(ConfigFlow, domain=DOMAIN):
                 {
                     vol.Optional(CONF_USER_INDEX, default=1): vol.All(
                         vol.Coerce(int), vol.Range(min=1, max=8)
+                    ),
+                    vol.Optional(CONF_CONSENT_CODE, default=0): vol.All(
+                        vol.Coerce(int), vol.Range(min=0, max=65535)
                     ),
                 }
             ),
@@ -128,6 +133,7 @@ class BeurerScaleConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_NAME: name,
                     CONF_MODEL_FAMILY: _detect_model_family(name),
                     CONF_USER_INDEX: user_input.get(CONF_USER_INDEX, 1),
+                    CONF_CONSENT_CODE: user_input.get(CONF_CONSENT_CODE, 0),
                 },
             )
 
@@ -152,6 +158,9 @@ class BeurerScaleConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_ADDRESS): vol.In(device_options),
                     vol.Optional(CONF_USER_INDEX, default=1): vol.All(
                         vol.Coerce(int), vol.Range(min=1, max=8)
+                    ),
+                    vol.Optional(CONF_CONSENT_CODE, default=0): vol.All(
+                        vol.Coerce(int), vol.Range(min=0, max=65535)
                     ),
                 }
             ),
