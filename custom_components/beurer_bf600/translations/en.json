@@ -1,0 +1,44 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Select Beurer/Sanitas Scale",
+        "description": "Select your Beurer or Sanitas body composition scale.",
+        "data": {
+          "address": "Device",
+          "user_index": "User slot on scale (1-8)"
+        }
+      },
+      "bluetooth_confirm": {
+        "title": "Confirm Setup",
+        "description": "Set up {name}?",
+        "data": {
+          "user_index": "User slot on scale (1-8)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Device is already configured",
+      "no_devices_found": "No supported scales found. Make sure your scale is powered on and in range."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "weight": { "name": "Weight" },
+      "body_fat": { "name": "Body fat" },
+      "body_water": { "name": "Body water" },
+      "muscle_mass": { "name": "Muscle mass" },
+      "bone_mass": { "name": "Bone mass" },
+      "bmi": { "name": "BMI" },
+      "basal_metabolism": { "name": "Basal metabolism" },
+      "impedance": { "name": "Impedance" },
+      "battery": { "name": "Battery" }
+    },
+    "binary_sensor": {
+      "connected": { "name": "Connected" }
+    },
+    "switch": {
+      "connection": { "name": "BLE connection" }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "name": "Beurer/Sanitas BLE Body Composition Scale",
+  "render_readme": true,
+  "homeassistant": "2025.1.0"
+}

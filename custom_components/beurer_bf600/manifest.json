@@ -1,0 +1,30 @@
+{
+  "domain": "beurer_bf600",
+  "name": "Beurer/Sanitas BLE Body Composition Scale",
+  "codeowners": ["@chalimov"],
+  "config_flow": true,
+  "dependencies": ["bluetooth"],
+  "documentation": "https://github.com/chalimov/ha-beurer-bf600",
+  "bluetooth": [
+    { "local_name": "Beurer BF600*" },
+    { "local_name": "Beurer BF700*" },
+    { "local_name": "Beurer BF710*" },
+    { "local_name": "Beurer BF800*" },
+    { "local_name": "Beurer BF850*" },
+    { "local_name": "Beurer BF950*" },
+    { "local_name": "Beurer BF105*" },
+    { "local_name": "SANITAS SBF70*" },
+    { "local_name": "SANITAS SBF72*" },
+    { "local_name": "SANITAS SBF73*" },
+    { "local_name": "SANITAS SBF75*" },
+    { "local_name": "SBF70*" },
+    { "local_name": "SBF72*" },
+    { "local_name": "SBF73*" },
+    { "local_name": "BF600*" },
+    { "local_name": "BF700*" }
+  ],
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "requirements": ["bleak>=0.21.1", "bleak-retry-connector>=3.4.0"],
+  "version": "0.1.0"
+}
