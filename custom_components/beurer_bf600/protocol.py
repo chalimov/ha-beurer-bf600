@@ -76,8 +76,6 @@ class ScaleData:
     user_id: int | None = None
     user_initials: str | None = None
     all_user_initials: dict[int, str] | None = None  # {1: "AS", 2: "ELA"}
-    all_user_heights: dict[int, int] | None = None  # {1: 180, 2: 163} (cm)
-    user_last_weights: dict[int, float] | None = None  # {1: 78.0, 2: 60.0}
     connected: bool = False
 
     def has_data(self) -> bool:
@@ -90,7 +88,7 @@ class ScaleData:
             "weight_kg", "body_fat_percent", "body_water_percent",
             "muscle_percent", "bone_mass_kg", "bmi", "basal_metabolism",
             "impedance", "battery_level", "timestamp", "user_id", "user_initials",
-            "all_user_initials", "all_user_heights", "user_last_weights",
+            "all_user_initials",
         ):
             val = getattr(other, attr)
             if val is not None:
@@ -107,12 +105,11 @@ async def read_scale(
     user_index: int = 1,
     consent_code: int = 0,
     user_consents: dict[int, int] | None = None,
-    prev_data: ScaleData | None = None,
 ) -> ScaleData:
     """Connect to a scale and read all available measurement data.
 
     user_consents: dict mapping user_index → consent_code for all known users.
-    prev_data: previous ScaleData with user_last_weights/heights for identification.
+    Falls back to user_index/consent_code if not provided (single-user mode).
     """
     # Log discovered GATT services for diagnostics
     if client.services:
@@ -131,12 +128,6 @@ async def read_scale(
 
     ctx = _ReadContext(client, user_index, consent_code=consent_code,
                        user_consents=consents)
-
-    # Seed with previous data for weight-based user identification
-    if prev_data:
-        ctx.data.user_last_weights = prev_data.user_last_weights
-        ctx.data.all_user_heights = prev_data.all_user_heights
-        ctx.data.all_user_initials = prev_data.all_user_initials
 
     if model_family == MODEL_FAMILY_BF700:
         await _read_bf700(ctx)
@@ -176,11 +167,12 @@ class _ReadContext:
 async def _read_bf600(ctx: _ReadContext) -> None:
     """Read using standard BLE Weight Scale / Body Composition services.
 
-    Protocol sequence for BF105/SBF73 variant (0xFFFF custom service):
+    Protocol sequence:
     1. Subscribe to all notification/indication characteristics
-    2. Write current time, query user list (get heights for user detection)
-    3. Consent for each user, collect all stored measurements
-    4. Pick freshest measurement, identify real user by weight + heights
+    2. Write current time, query user list
+    3. Consent for each user, collect stored measurements
+    4. Pick the freshest measurement, resolve user initials
+    5. Clear consent so the scale uses its own user detection next time
     """
     client = ctx.client
 
@@ -202,7 +194,7 @@ async def _read_bf600(ctx: _ReadContext) -> None:
     # Write current time
     await _write_current_time(client)
 
-    # Query user list (provides heights for weight-based user detection)
+    # Query user list
     try:
         await client.write_gatt_char(
             CHAR_CUSTOM_FFFF_USER_LIST, bytes([0x00]), response=True
@@ -213,12 +205,12 @@ async def _read_bf600(ctx: _ReadContext) -> None:
 
     await asyncio.sleep(0.5)
 
-    # Consent for each user and collect all stored measurements
+    # Consent for each user and collect stored measurements
     consents = ctx.user_consents
     if not consents:
         consents = {ctx.user_index: ctx.consent_code}
 
-    all_results: list[ScaleData] = []
+    best: ScaleData | None = None
     for uid, code in sorted(consents.items()):
         result = await _consent_and_read(ctx, uid, code)
         if result and result.has_data():
@@ -227,20 +219,35 @@ async def _read_bf600(ctx: _ReadContext) -> None:
                 uid, result.weight_kg or 0,
                 result.timestamp.isoformat() if result.timestamp else "none",
             )
-            all_results.append(result)
+            if best is None or _is_newer(result, best):
+                best = result
 
-    if not all_results:
-        return
+    if best:
+        ctx.data.merge(best)
 
-    # Pick the freshest measurement
-    best = all_results[0]
-    for r in all_results[1:]:
-        if _is_newer(r, best):
-            best = r
-    ctx.data.merge(best)
+    # Resolve user_initials from all_user_initials + user_id
+    if ctx.data.user_id and ctx.data.all_user_initials and not ctx.data.user_initials:
+        ctx.data.user_initials = ctx.data.all_user_initials.get(ctx.data.user_id)
 
-    # Identify the real user by weight (scale's user_id is unreliable)
-    _identify_user_by_weight(ctx.data)
+    # Clear consent so the scale uses its own weight-based user detection
+    # for the next measurement. Without this, the last-consented user would
+    # be used for all future measurements regardless of who steps on.
+    await _clear_consent(client)
+
+
+async def _clear_consent(client: BleakClient) -> None:
+    """Clear the active UCP consent by sending consent for user 0.
+
+    The scale rejects this (Not Authorized) but the side effect is that
+    the active user is reset, allowing the scale to use its own weight-based
+    user detection for the next measurement.
+    """
+    try:
+        cmd = struct.pack("<BBH", UCP_CONSENT, 0, 0)
+        await client.write_gatt_char(CHAR_USER_CONTROL_POINT, cmd, response=True)
+        _LOGGER.debug("Consent cleared (user=0)")
+    except Exception as e:
+        _LOGGER.debug("Clear consent failed: %s", e)
 
 
 def _is_newer(a: ScaleData, b: ScaleData) -> bool:
@@ -248,69 +255,6 @@ def _is_newer(a: ScaleData, b: ScaleData) -> bool:
     if a.timestamp and b.timestamp:
         return a.timestamp > b.timestamp
     return a.timestamp is not None
-
-
-def _identify_user_by_weight(data: ScaleData) -> None:
-    """Override user_id/user_initials based on weight matching.
-
-    The scale's user_id is unreliable (determined by last UCP consent,
-    which persists across sessions). Instead, match the measured weight
-    against user profiles using:
-    1. Last known weights per user (best — direct comparison)
-    2. User heights from scale (fallback — BMI plausibility)
-    """
-    if not data.weight_kg:
-        return
-
-    heights = data.all_user_heights or {}
-    initials = data.all_user_initials or {}
-    last_weights = data.user_last_weights or {}
-
-    if not initials:
-        return
-
-    weight = data.weight_kg
-    best_uid = data.user_id
-    best_distance = float("inf")
-
-    if last_weights:
-        # Match against last known weights (most accurate)
-        for uid, last_w in last_weights.items():
-            if uid not in initials:
-                continue
-            dist = abs(weight - last_w)
-            if dist < best_distance:
-                best_distance = dist
-                best_uid = uid
-        _LOGGER.debug(
-            "Weight-match (history): %.1f kg → user %d (%s), dist=%.1f",
-            weight, best_uid, initials.get(best_uid, "?"), best_distance,
-        )
-    elif heights:
-        # Fallback: pick user whose height gives most plausible BMI
-        for uid, h_cm in heights.items():
-            if uid not in initials or h_cm <= 0:
-                continue
-            bmi = weight / (h_cm / 100.0) ** 2
-            # Distance from BMI 22 (center of normal range)
-            dist = abs(bmi - 22.0)
-            if dist < best_distance:
-                best_distance = dist
-                best_uid = uid
-        _LOGGER.debug(
-            "Weight-match (BMI): %.1f kg → user %d (%s), dist=%.1f",
-            weight, best_uid, initials.get(best_uid, "?"), best_distance,
-        )
-
-    if best_uid and best_uid != data.user_id:
-        _LOGGER.debug(
-            "Correcting user: %d → %d (%s)",
-            data.user_id or 0, best_uid, initials.get(best_uid, "?"),
-        )
-        data.user_id = best_uid
-        data.user_initials = initials.get(best_uid)
-    elif best_uid:
-        data.user_initials = initials.get(best_uid)
 
 
 async def _consent_and_read(
@@ -348,7 +292,7 @@ async def _consent_and_read(
     except Exception:
         pass
 
-    # Short wait — data should be stored and ready, no need to wait for live
+    # Short wait — data is already stored, no need for long timeout
     try:
         await asyncio.wait_for(ctx.event.wait(), timeout=5.0)
     except asyncio.TimeoutError:
@@ -361,8 +305,6 @@ async def _consent_and_read(
     if result.all_user_initials:
         saved_data.all_user_initials = result.all_user_initials
     return result if result.has_data() else None
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -439,8 +381,6 @@ def _on_weight_measurement(
 
     _LOGGER.debug("Weight measurement: %.2f kg, user=%s", m.weight_kg, m.user_id)
 
-    # Accept measurements from all users (multi-user support)
-    # Set initials from the user list we received
     if m.user_id and ctx.data.all_user_initials:
         m.user_initials = ctx.data.all_user_initials.get(m.user_id)
 
@@ -534,8 +474,6 @@ def _on_body_composition(
         m.body_fat_percent or 0, m.body_water_percent or 0, m.muscle_percent or 0,
     )
 
-    # Accept measurements from all users (multi-user support)
-
     if flags & BCM_FLAG_MULTIPLE_PACKET:
         ctx.data.merge(m)
         return
@@ -556,14 +494,10 @@ def _on_custom_notification(
     if str(_char.uuid).startswith("00000001") and len(data) >= 12 and data[0] == 0x00:
         idx = data[1]
         initials = data[2:5].decode("ascii", errors="replace").strip()
-        height_cm = data[9]
         if ctx.data.all_user_initials is None:
             ctx.data.all_user_initials = {}
         ctx.data.all_user_initials[idx] = initials
-        if ctx.data.all_user_heights is None:
-            ctx.data.all_user_heights = {}
-        ctx.data.all_user_heights[idx] = height_cm
-        _LOGGER.debug("User %d: %s, %d cm", idx, initials, height_cm)
+        _LOGGER.debug("User %d initials: %s", idx, initials)
 
 
 def _on_ucp_response(
@@ -655,5 +589,3 @@ async def _write_current_time(client: BleakClient) -> None:
         await client.write_gatt_char(CHAR_CURRENT_TIME, time_data, response=True)
     except Exception:
         _LOGGER.debug("Could not write current time")
-
-

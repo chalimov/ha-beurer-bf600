@@ -128,10 +128,6 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
             data.user_id = stored.get("user_id")
             data.user_initials = stored.get("user_initials")
             data.all_user_initials = stored.get("all_user_initials")
-            data.all_user_heights = stored.get("all_user_heights")
-            raw_lw = stored.get("user_last_weights")
-            if raw_lw and isinstance(raw_lw, dict):
-                data.user_last_weights = {int(k): float(v) for k, v in raw_lw.items()}
             ts = stored.get("timestamp")
             if ts:
                 try:
@@ -144,12 +140,6 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
 
     async def _save_data(self, data: ScaleData) -> None:
         """Save measurement to persistent storage."""
-        # Update per-user last known weight
-        if data.user_id and data.weight_kg:
-            if data.user_last_weights is None:
-                data.user_last_weights = {}
-            data.user_last_weights[data.user_id] = data.weight_kg
-
         await self._store.async_save({
             "weight_kg": data.weight_kg,
             "body_fat_percent": data.body_fat_percent,
@@ -163,8 +153,6 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
             "user_id": data.user_id,
             "user_initials": data.user_initials,
             "all_user_initials": data.all_user_initials,
-            "all_user_heights": data.all_user_heights,
-            "user_last_weights": data.user_last_weights,
             "timestamp": data.timestamp.isoformat() if data.timestamp else None,
         })
 
@@ -246,7 +234,6 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
                     user_index=self._user_index,
                     consent_code=self._consent_code,
                     user_consents=self._user_consents,
-                    prev_data=self._last_data,
                 )
                 if data.has_data():
                     self._last_data = data
