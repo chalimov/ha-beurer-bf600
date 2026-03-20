@@ -203,7 +203,12 @@ async def _read_bf600(ctx: _ReadContext) -> None:
     except Exception as e:
         _LOGGER.debug("Write FFFF/UserList failed: %s", e)
 
-    await asyncio.sleep(0.5)
+    # Wait for the scale to finish weighing and store the result.
+    # With consent cleared from the previous session, the scale uses its
+    # own weight-based user detection. We must not consent during this
+    # time or it would override the detection.
+    _LOGGER.debug("Waiting 20s for scale to complete measurement...")
+    await asyncio.sleep(20.0)
 
     # Consent for each user and collect stored measurements
     consents = ctx.user_consents
