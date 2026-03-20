@@ -277,6 +277,26 @@ async def _consent_and_read(
     user_data.all_user_initials = saved_data.all_user_initials
     ctx.data = user_data
 
+    # Track consent result via the UCP handler
+    consent_ok = asyncio.Event()
+    consent_rejected = False
+
+    def _track_consent(_char, data):
+        nonlocal consent_rejected
+        if len(data) >= 3 and data[0] == UCP_RESPONSE:
+            if data[2] == UCP_SUCCESS:
+                consent_ok.set()
+            else:
+                consent_rejected = True
+                consent_ok.set()
+
+    # Temporarily override UCP handler to track this consent
+    try:
+        await client.stop_notify(CHAR_USER_CONTROL_POINT)
+        await client.start_notify(CHAR_USER_CONTROL_POINT, _track_consent)
+    except Exception:
+        pass
+
     try:
         consent_cmd = struct.pack("<BBH", UCP_CONSENT, user_index, consent_code)
         _LOGGER.debug(
@@ -286,10 +306,28 @@ async def _consent_and_read(
         await client.write_gatt_char(
             CHAR_USER_CONTROL_POINT, consent_cmd, response=True
         )
+        await asyncio.wait_for(consent_ok.wait(), timeout=2.0)
     except Exception as e:
         _LOGGER.debug("UCP consent failed for user %d: %s", user_index, e)
         ctx.data = saved_data
         return None
+
+    # Restore normal UCP handler
+    try:
+        await client.stop_notify(CHAR_USER_CONTROL_POINT)
+        await client.start_notify(
+            CHAR_USER_CONTROL_POINT,
+            lambda c, d: _on_ucp_response(ctx, c, d),
+        )
+    except Exception:
+        pass
+
+    if consent_rejected:
+        _LOGGER.debug("Consent rejected for user %d, skipping", user_index)
+        ctx.data = saved_data
+        return None
+
+    _LOGGER.debug("Consent accepted for user %d", user_index)
 
     # Trigger stored measurement retrieval
     try:

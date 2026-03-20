@@ -168,15 +168,9 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
         self.hass.async_create_task(self._connect())
 
     async def _async_update_data(self) -> ScaleData:
-        if not self.enabled:
-            return self._last_data or ScaleData()
-
-        if not self._connected:
-            try:
-                await self._connect()
-            except Exception as err:
-                _LOGGER.debug("Periodic connect failed: %s: %s", type(err).__name__, err)
-
+        # No periodic reconnect — only connect on BLE advertisement
+        # (when someone steps on the scale). Periodic connections wake
+        # the scale and set a consent that overrides user detection.
         return self._last_data or ScaleData()
 
     async def _connect(self) -> None:
