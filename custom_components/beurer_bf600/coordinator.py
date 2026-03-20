@@ -29,6 +29,7 @@ from .const import (
     CONF_MODEL_FAMILY,
     CONF_USER_INDEX,
     CONF_USER_NAME,
+    CONF_USER_NAMES,
     DOMAIN,
     MODEL_FAMILY_BF600,
     RECONNECT_INTERVAL,
@@ -62,6 +63,7 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
         self._user_index: int = entry.data.get(CONF_USER_INDEX, 1)
         self._consent_code: int = entry.data.get(CONF_CONSENT_CODE, 0)
         self._user_name: str = entry.data.get(CONF_USER_NAME, "")
+        self._user_names: dict[str, str] = entry.data.get(CONF_USER_NAMES, {})
         self._client: BleakClient | None = None
         self._connect_lock = asyncio.Lock()
         self._connected = False
@@ -83,7 +85,18 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
 
     @property
     def user_name(self) -> str:
+        """Return display name for current measurement's user."""
+        # Check user_names dict first (maps initials to full name)
+        if self._last_data and self._last_data.user_initials:
+            mapped = self._user_names.get(self._last_data.user_initials, "")
+            if mapped:
+                return mapped
+        # Fall back to single user_name config
         return self._user_name
+
+    @property
+    def user_names(self) -> dict[str, str]:
+        return self._user_names
 
     async def async_load_stored_data(self) -> None:
         """Load last measurement from persistent storage."""
@@ -101,6 +114,7 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
             data.battery_level = stored.get("battery_level")
             data.user_id = stored.get("user_id")
             data.user_initials = stored.get("user_initials")
+            data.all_user_initials = stored.get("all_user_initials")
             ts = stored.get("timestamp")
             if ts:
                 try:
@@ -125,6 +139,7 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
             "battery_level": data.battery_level,
             "user_id": data.user_id,
             "user_initials": data.user_initials,
+            "all_user_initials": data.all_user_initials,
             "timestamp": data.timestamp.isoformat() if data.timestamp else None,
         })
 

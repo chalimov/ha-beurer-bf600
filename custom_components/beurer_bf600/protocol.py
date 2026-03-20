@@ -75,6 +75,7 @@ class ScaleData:
     timestamp: datetime.datetime | None = None
     user_id: int | None = None
     user_initials: str | None = None
+    all_user_initials: dict[int, str] | None = None  # {1: "AS", 2: "ELA"}
     connected: bool = False
 
     def has_data(self) -> bool:
@@ -87,6 +88,7 @@ class ScaleData:
             "weight_kg", "body_fat_percent", "body_water_percent",
             "muscle_percent", "bone_mass_kg", "bmi", "basal_metabolism",
             "impedance", "battery_level", "timestamp", "user_id", "user_initials",
+            "all_user_initials",
         ):
             val = getattr(other, attr)
             if val is not None:
@@ -284,8 +286,10 @@ def _on_weight_measurement(
 
     _LOGGER.debug("Weight measurement: %.2f kg, user=%s", m.weight_kg, m.user_id)
 
-    if m.user_id is not None and m.user_id != ctx.user_index:
-        return
+    # Accept measurements from all users (multi-user support)
+    # Set initials from the user list we received
+    if m.user_id and ctx.data.all_user_initials:
+        m.user_initials = ctx.data.all_user_initials.get(m.user_id)
 
     ctx.data.merge(m)
     ctx.event.set()
@@ -377,8 +381,7 @@ def _on_body_composition(
         m.body_fat_percent or 0, m.body_water_percent or 0, m.muscle_percent or 0,
     )
 
-    if m.user_id is not None and m.user_id != ctx.user_index:
-        return
+    # Accept measurements from all users (multi-user support)
 
     if flags & BCM_FLAG_MULTIPLE_PACKET:
         ctx.data.merge(m)
@@ -396,13 +399,14 @@ def _on_custom_notification(
         "Custom FFFF notification: char=%s len=%d data=%s",
         _char.uuid, len(data), data.hex(),
     )
-    # Parse user list entries to extract initials for our user
+    # Parse user list entries to capture all users
     if str(_char.uuid).startswith("00000001") and len(data) >= 12 and data[0] == 0x00:
         idx = data[1]
         initials = data[2:5].decode("ascii", errors="replace").strip()
-        if idx == ctx.user_index:
-            ctx.data.user_initials = initials
-            _LOGGER.debug("Matched user %d initials: %s", idx, initials)
+        if ctx.data.all_user_initials is None:
+            ctx.data.all_user_initials = {}
+        ctx.data.all_user_initials[idx] = initials
+        _LOGGER.debug("User %d initials: %s", idx, initials)
 
 
 def _on_ucp_response(

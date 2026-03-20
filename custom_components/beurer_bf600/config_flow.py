@@ -182,46 +182,63 @@ class BeurerScalePairFlow(OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Main options step: edit user name or start re-pairing."""
+        """Main options step: assign full names to scale users."""
+        # Get known user initials from coordinator
+        coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        all_initials: dict[int, str] = {}
+        if coordinator and coordinator.data and coordinator.data.all_user_initials:
+            all_initials = coordinator.data.all_user_initials
+
+        # Current name mappings
+        current_names: dict[str, str] = self.config_entry.data.get(CONF_USER_NAMES, {})
+        # Migrate old single user_name if present
+        old_name = self.config_entry.data.get(CONF_USER_NAME, "")
+        if old_name and not current_names:
+            for initials in all_initials.values():
+                current_names[initials] = old_name
+                break
+
         if user_input is not None:
-            # Save user name
-            user_name = user_input.get(CONF_USER_NAME, "").strip()
+            # Collect name mappings from form
+            user_names = {}
+            for idx, initials in sorted(all_initials.items()):
+                key = f"name_{initials}"
+                name = user_input.get(key, "").strip()
+                if name:
+                    user_names[initials] = name
+
             new_data = {**self.config_entry.data}
-            new_data[CONF_USER_NAME] = user_name
+            new_data[CONF_USER_NAMES] = user_names
             self.hass.config_entries.async_update_entry(
                 self.config_entry, data=new_data
             )
 
-            # If re-pair requested, go to pairing flow
             if user_input.get("repair", False):
                 return await self.async_step_wake_scale()
 
             await self.hass.config_entries.async_reload(self.config_entry.entry_id)
             return self.async_create_entry(data={})
 
-        current_name = self.config_entry.data.get(CONF_USER_NAME, "")
+        # Build form with a name field per scale user
+        schema_dict = {}
+        user_lines = []
+        for idx, initials in sorted(all_initials.items()):
+            key = f"name_{initials}"
+            default = current_names.get(initials, "")
+            schema_dict[vol.Optional(key, default=default)] = str
+            user_lines.append(f"User {idx}: **{initials}**")
 
-        # Get current user info from coordinator
-        coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
-        user_idx = self.config_entry.data.get(CONF_USER_INDEX, 0)
-        initials = "?"
-        if coordinator and coordinator.data and coordinator.data.user_initials:
-            initials = coordinator.data.user_initials
-        elif user_idx > 0:
-            initials = f"User {user_idx}"
+        if not schema_dict:
+            user_lines.append("No users found — step on the scale first")
+
+        schema_dict[vol.Optional("repair", default=False)] = bool
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(CONF_USER_NAME, default=current_name): str,
-                    vol.Optional("repair", default=False): bool,
-                }
-            ),
+            data_schema=vol.Schema(schema_dict),
             description_placeholders={
                 "name": self._name,
-                "initials": initials,
-                "user_index": str(user_idx),
+                "users": ", ".join(user_lines) if user_lines else "unknown",
             },
         )
 
