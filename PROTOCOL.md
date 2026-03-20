@@ -267,25 +267,47 @@ The scale supports up to **8 user slots**. Each user has:
 - **Gender** (0=Male, 1=Female)
 - **Activity level** (1-5)
 
-The UCP consent code is per-user and per-bond. The integration accepts
-measurements from ALL users and shows the user's initials (or mapped full name)
-in the User sensor.
+The UCP consent code is per-user and per-bond. The integration stores
+consent codes for all users (`CONF_USER_CONSENTS`) and retrieves
+measurements from each user per session, keeping the freshest one.
+
+### Consent Persistence & User Detection
+
+**Critical discovery**: UCP consent persists in the scale's firmware across
+BLE disconnects and power cycles. The last-consented user becomes the
+"active user" for ALL future measurements, overriding the scale's own
+weight-based user detection. This means:
+
+- If the integration consents as user 1 (AS), the scale assigns all
+  subsequent measurements to AS — even if a different person weighs.
+- Body composition (fat %, muscle %, water %) is calculated using the
+  consented user's profile (height, age, gender), so wrong consent =
+  wrong body comp values.
+
+**Fix**: Send `consent(user=0, code=0)` at the end of each BLE session.
+The scale rejects this with "Not Authorized" (result=0x05), but as a side
+effect, the active user is cleared. On the next weigh-in, the scale falls
+back to its own weight-based user detection and correctly identifies who
+is standing on it.
 
 ---
 
 ## Integration Connection Sequence (HA / ESPHome Proxy)
 
-The Home Assistant integration follows a simplified sequence:
+The Home Assistant integration follows this sequence:
 
 1. **BLE advertisement callback** triggers connection when scale wakes
 2. **`establish_connection()`** via `bleak-retry-connector` with `dangerous_use_bleak_cache=True`
 3. **`client.pair()`** — establishes BLE bond (Just Works, required for indications)
 4. **Subscribe** to: Weight (0x2A9D), Body Comp (0x2A9C), UCP (0x2A9F), User List (0x0001), Measure (0x0006)
-5. **UCP Consent** — `[0x02, user_index, consent_lo, consent_hi]` to 0x2A9F
-6. **Write current time** to 0x2A2B (local timezone)
-7. **Write `0x00` to User List** (0x0001) → receive all user initials
-8. **Write `0x00` to Measure** (0x0006) → trigger measurement delivery
-9. **Wait up to 30s** for Weight + Body Composition indications
+5. **Write current time** to 0x2A2B (local timezone)
+6. **Write `0x00` to User List** (0x0001) → receive all user records (initials, height, etc.)
+7. **For each user with a consent code**:
+   - **UCP Consent** — `[0x02, user_index, consent_lo, consent_hi]` to 0x2A9F
+   - **Write `0x00` to Measure** (0x0006) → trigger stored measurement delivery
+   - **Wait up to 5s** for Weight + Body Composition indications
+8. **Pick freshest measurement** (by timestamp) across all users
+9. **Clear consent** — `[0x02, 0x00, 0x00, 0x00]` to 0x2A9F (resets active user)
 10. **Read battery** from 0x2A19
 11. **Disconnect**
 
