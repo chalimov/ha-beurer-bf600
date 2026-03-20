@@ -184,11 +184,15 @@ class BeurerScalePairFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Main options step: assign full names to scale users."""
-        # Get known user initials from coordinator
+        # Get known user initials from coordinator (live or stored)
         coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
         all_initials: dict[int, str] = {}
         if coordinator and coordinator.data and coordinator.data.all_user_initials:
             all_initials = coordinator.data.all_user_initials
+        elif coordinator and coordinator._last_data and coordinator._last_data.all_user_initials:
+            all_initials = coordinator._last_data.all_user_initials
+        # Convert string keys from storage back to int
+        all_initials = {int(k): v for k, v in all_initials.items()}
 
         # Current name mappings
         current_names: dict[str, str] = self.config_entry.data.get(CONF_USER_NAMES, {})
