@@ -104,13 +104,8 @@ async def read_scale(
     model_family: str = MODEL_FAMILY_BF600,
     user_index: int = 1,
     consent_code: int = 0,
-    user_consents: dict[int, int] | None = None,
 ) -> ScaleData:
-    """Connect to a scale and read all available measurement data.
-
-    user_consents: dict mapping user_index → consent_code for all known users.
-    Falls back to user_index/consent_code if not provided (single-user mode).
-    """
+    """Connect to a scale and read all available measurement data."""
     # Log discovered GATT services for diagnostics
     if client.services:
         for service in client.services:
@@ -121,13 +116,7 @@ async def read_scale(
     else:
         _LOGGER.debug("No GATT services discovered (services=%s)", client.services)
 
-    # Build consents dict: merge legacy single-user with multi-user
-    consents = dict(user_consents or {})
-    if user_index and consent_code and user_index not in consents:
-        consents[user_index] = consent_code
-
-    ctx = _ReadContext(client, user_index, consent_code=consent_code,
-                       user_consents=consents)
+    ctx = _ReadContext(client, user_index, consent_code=consent_code)
 
     if model_family == MODEL_FAMILY_BF700:
         await _read_bf700(ctx)
@@ -155,7 +144,6 @@ class _ReadContext:
     client: BleakClient
     user_index: int
     consent_code: int = 0
-    user_consents: dict[int, int] = field(default_factory=dict)
     data: ScaleData = field(default_factory=ScaleData)
     event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -167,12 +155,12 @@ class _ReadContext:
 async def _read_bf600(ctx: _ReadContext) -> None:
     """Read using standard BLE Weight Scale / Body Composition services.
 
-    Protocol sequence:
+    Protocol sequence for BF105/SBF73 variant (0xFFFF custom service):
     1. Subscribe to all notification/indication characteristics
-    2. Write current time, query user list
-    3. Consent for each user, collect stored measurements
-    4. Pick the freshest measurement, resolve user initials
-    5. Clear consent so the scale uses its own user detection next time
+    2. Send UCP consent
+    3. Write current time
+    4. Trigger custom service user list + measurement
+    5. Wait for data (indications or notifications)
     """
     client = ctx.client
 
@@ -191,165 +179,37 @@ async def _read_bf600(ctx: _ReadContext) -> None:
         except Exception as e:
             _LOGGER.debug("Subscribe %s failed: %s", name, e)
 
+    # UCP consent
+    try:
+        consent_cmd = struct.pack("<BBH", UCP_CONSENT, ctx.user_index, ctx.consent_code)
+        _LOGGER.debug("UCP consent cmd: %s (user=%d code=%d/0x%04X)",
+                       consent_cmd.hex(), ctx.user_index, ctx.consent_code, ctx.consent_code)
+        await client.write_gatt_char(CHAR_USER_CONTROL_POINT, consent_cmd, response=True)
+        _LOGGER.debug("UCP consent written OK")
+    except Exception as e:
+        _LOGGER.debug("UCP consent write failed: %s", e)
+
     # Write current time
     await _write_current_time(client)
 
-    # Query user list
+    # Trigger custom FFFF user list + measurement (BF105/SBF73 pattern)
+    for char_uuid, name in [
+        (CHAR_CUSTOM_FFFF_USER_LIST, "FFFF/UserList"),
+        (CHAR_CUSTOM_FFFF_MEASURE_REQ, "FFFF/Measure"),
+    ]:
+        try:
+            await client.write_gatt_char(char_uuid, bytes([0x00]), response=True)
+            _LOGGER.debug("Wrote trigger to %s", name)
+        except Exception as e:
+            _LOGGER.debug("Write %s failed: %s", name, e)
+
+    # Wait for data — long timeout since scale may need time to measure
     try:
-        await client.write_gatt_char(
-            CHAR_CUSTOM_FFFF_USER_LIST, bytes([0x00]), response=True
-        )
-        _LOGGER.debug("Wrote trigger to FFFF/UserList")
-    except Exception as e:
-        _LOGGER.debug("Write FFFF/UserList failed: %s", e)
-
-    # Wait for the scale to finish weighing and store the result.
-    # With consent cleared from the previous session, the scale uses its
-    # own weight-based user detection. We must not consent during this
-    # time or it would override the detection.
-    _LOGGER.debug("Waiting 20s for scale to complete measurement...")
-    await asyncio.sleep(20.0)
-
-    # Consent for each user and collect stored measurements
-    consents = ctx.user_consents
-    if not consents:
-        consents = {ctx.user_index: ctx.consent_code}
-
-    best: ScaleData | None = None
-    for uid, code in sorted(consents.items()):
-        result = await _consent_and_read(ctx, uid, code)
-        if result and result.has_data():
-            _LOGGER.debug(
-                "User %d data: weight=%.2f ts=%s",
-                uid, result.weight_kg or 0,
-                result.timestamp.isoformat() if result.timestamp else "none",
-            )
-            best = result
-            # Stop after first user with data — consenting for more users
-            # would re-tag the same measurement under a different user.
-            break
-
-    if best:
-        ctx.data.merge(best)
-
-    # Resolve user_initials from all_user_initials + user_id
-    if ctx.data.user_id and ctx.data.all_user_initials and not ctx.data.user_initials:
-        ctx.data.user_initials = ctx.data.all_user_initials.get(ctx.data.user_id)
-
-    # Clear consent so the scale uses its own weight-based user detection
-    # for the next measurement. Without this, the last-consented user would
-    # be used for all future measurements regardless of who steps on.
-    await _clear_consent(client)
-
-
-async def _clear_consent(client: BleakClient) -> None:
-    """Clear the active UCP consent by sending consent for user 0.
-
-    The scale rejects this (Not Authorized) but the side effect is that
-    the active user is reset, allowing the scale to use its own weight-based
-    user detection for the next measurement.
-    """
-    try:
-        cmd = struct.pack("<BBH", UCP_CONSENT, 0, 0)
-        await client.write_gatt_char(CHAR_USER_CONTROL_POINT, cmd, response=True)
-        _LOGGER.debug("Consent cleared (user=0)")
-    except Exception as e:
-        _LOGGER.debug("Clear consent failed: %s", e)
-
-
-def _is_newer(a: ScaleData, b: ScaleData) -> bool:
-    """Return True if measurement a is newer than b."""
-    if a.timestamp and b.timestamp:
-        return a.timestamp > b.timestamp
-    return a.timestamp is not None
-
-
-async def _consent_and_read(
-    ctx: _ReadContext, user_index: int, consent_code: int
-) -> ScaleData | None:
-    """Consent as a specific user, trigger measurement, return data."""
-    client = ctx.client
-
-    # Reset event and data for this user
-    ctx.event.clear()
-    user_data = ScaleData()
-    saved_data = ctx.data
-    user_data.all_user_initials = saved_data.all_user_initials
-    ctx.data = user_data
-
-    # Track consent result via the UCP handler
-    consent_ok = asyncio.Event()
-    consent_rejected = False
-
-    def _track_consent(_char, data):
-        nonlocal consent_rejected
-        if len(data) >= 3 and data[0] == UCP_RESPONSE:
-            if data[2] == UCP_SUCCESS:
-                consent_ok.set()
-            else:
-                consent_rejected = True
-                consent_ok.set()
-
-    # Temporarily override UCP handler to track this consent
-    try:
-        await client.stop_notify(CHAR_USER_CONTROL_POINT)
-        await client.start_notify(CHAR_USER_CONTROL_POINT, _track_consent)
-    except Exception:
-        pass
-
-    try:
-        consent_cmd = struct.pack("<BBH", UCP_CONSENT, user_index, consent_code)
-        _LOGGER.debug(
-            "UCP consent: user=%d code=%d/0x%04X",
-            user_index, consent_code, consent_code,
-        )
-        await client.write_gatt_char(
-            CHAR_USER_CONTROL_POINT, consent_cmd, response=True
-        )
-        await asyncio.wait_for(consent_ok.wait(), timeout=2.0)
-    except Exception as e:
-        _LOGGER.debug("UCP consent failed for user %d: %s", user_index, e)
-        ctx.data = saved_data
-        return None
-
-    # Restore normal UCP handler
-    try:
-        await client.stop_notify(CHAR_USER_CONTROL_POINT)
-        await client.start_notify(
-            CHAR_USER_CONTROL_POINT,
-            lambda c, d: _on_ucp_response(ctx, c, d),
-        )
-    except Exception:
-        pass
-
-    if consent_rejected:
-        _LOGGER.debug("Consent rejected for user %d, skipping", user_index)
-        ctx.data = saved_data
-        return None
-
-    _LOGGER.debug("Consent accepted for user %d", user_index)
-
-    # Trigger stored measurement retrieval
-    try:
-        await client.write_gatt_char(
-            CHAR_CUSTOM_FFFF_MEASURE_REQ, bytes([0x00]), response=True
-        )
-    except Exception:
-        pass
-
-    # Short wait — data is already stored, no need for long timeout
-    try:
-        await asyncio.wait_for(ctx.event.wait(), timeout=5.0)
+        await asyncio.wait_for(ctx.event.wait(), timeout=30.0)
     except asyncio.TimeoutError:
-        _LOGGER.debug("No stored data for user %d", user_index)
+        _LOGGER.debug("Timeout: no measurement data received after 30s")
 
-    await asyncio.sleep(0.3)
 
-    result = ctx.data
-    ctx.data = saved_data
-    if result.all_user_initials:
-        saved_data.all_user_initials = result.all_user_initials
-    return result if result.has_data() else None
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +286,8 @@ def _on_weight_measurement(
 
     _LOGGER.debug("Weight measurement: %.2f kg, user=%s", m.weight_kg, m.user_id)
 
+    # Accept measurements from all users (multi-user support)
+    # Set initials from the user list we received
     if m.user_id and ctx.data.all_user_initials:
         m.user_initials = ctx.data.all_user_initials.get(m.user_id)
 
@@ -518,6 +380,8 @@ def _on_body_composition(
         "Body composition: fat=%.1f%%, water=%.1f%%, muscle=%.1f%%",
         m.body_fat_percent or 0, m.body_water_percent or 0, m.muscle_percent or 0,
     )
+
+    # Accept measurements from all users (multi-user support)
 
     if flags & BCM_FLAG_MULTIPLE_PACKET:
         ctx.data.merge(m)
@@ -634,3 +498,5 @@ async def _write_current_time(client: BleakClient) -> None:
         await client.write_gatt_char(CHAR_CURRENT_TIME, time_data, response=True)
     except Exception:
         _LOGGER.debug("Could not write current time")
+
+

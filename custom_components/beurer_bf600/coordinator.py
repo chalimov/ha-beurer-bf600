@@ -27,7 +27,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .const import (
     CONF_CONSENT_CODE,
     CONF_MODEL_FAMILY,
-    CONF_USER_CONSENTS,
     CONF_USER_INDEX,
     CONF_USER_NAME,
     CONF_USER_NAMES,
@@ -65,11 +64,6 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
         self._consent_code: int = entry.data.get(CONF_CONSENT_CODE, 0)
         self._user_name: str = entry.data.get(CONF_USER_NAME, "")
         self._user_names: dict[str, str] = entry.data.get(CONF_USER_NAMES, {})
-        # Per-user consent codes: {user_index: consent_code}
-        raw_consents = entry.data.get(CONF_USER_CONSENTS, {})
-        self._user_consents: dict[int, int] = {
-            int(k): int(v) for k, v in raw_consents.items() if int(v) > 0
-        }
         self._client: BleakClient | None = None
         self._connect_lock = asyncio.Lock()
         self._connected = False
@@ -92,19 +86,12 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
     @property
     def user_name(self) -> str:
         """Return display name for current measurement's user."""
-        if not self._last_data:
-            return self._user_name
-
-        initials = self._last_data.user_initials
-        # If initials not set, try resolving from user_id + all_user_initials
-        if not initials and self._last_data.user_id and self._last_data.all_user_initials:
-            initials = self._last_data.all_user_initials.get(self._last_data.user_id)
-
-        if initials:
-            mapped = self._user_names.get(initials, "")
-            return mapped or initials
-
-        # Fall back to single user_name config only when we have no user_id info
+        # Check user_names dict first (maps initials to full name)
+        if self._last_data and self._last_data.user_initials:
+            mapped = self._user_names.get(self._last_data.user_initials, "")
+            if mapped:
+                return mapped
+        # Fall back to single user_name config
         return self._user_name
 
     @property
@@ -168,9 +155,15 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
         self.hass.async_create_task(self._connect())
 
     async def _async_update_data(self) -> ScaleData:
-        # No periodic reconnect — only connect on BLE advertisement
-        # (when someone steps on the scale). Periodic connections wake
-        # the scale and set a consent that overrides user detection.
+        if not self.enabled:
+            return self._last_data or ScaleData()
+
+        if not self._connected:
+            try:
+                await self._connect()
+            except Exception as err:
+                _LOGGER.debug("Periodic connect failed: %s: %s", type(err).__name__, err)
+
         return self._last_data or ScaleData()
 
     async def _connect(self) -> None:
@@ -227,7 +220,6 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
                     model_family=self._model_family,
                     user_index=self._user_index,
                     consent_code=self._consent_code,
-                    user_consents=self._user_consents,
                 )
                 if data.has_data():
                     self._last_data = data
