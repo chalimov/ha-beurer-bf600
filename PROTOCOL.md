@@ -273,6 +273,59 @@ in the User sensor.
 
 ---
 
+## Integration Connection Sequence (HA / ESPHome Proxy)
+
+The Home Assistant integration follows a simplified sequence:
+
+1. **BLE advertisement callback** triggers connection when scale wakes
+2. **`establish_connection()`** via `bleak-retry-connector` with `dangerous_use_bleak_cache=True`
+3. **`client.pair()`** — establishes BLE bond (Just Works, required for indications)
+4. **Subscribe** to: Weight (0x2A9D), Body Comp (0x2A9C), UCP (0x2A9F), User List (0x0001), Measure (0x0006)
+5. **UCP Consent** — `[0x02, user_index, consent_lo, consent_hi]` to 0x2A9F
+6. **Write current time** to 0x2A2B (local timezone)
+7. **Write `0x00` to User List** (0x0001) → receive all user initials
+8. **Write `0x00` to Measure** (0x0006) → trigger measurement delivery
+9. **Wait up to 30s** for Weight + Body Composition indications
+10. **Read battery** from 0x2A19
+11. **Disconnect**
+
+Data is persisted to HA Store (`.storage/beurer_bf600_<address>`) so sensor values survive reboots.
+
+### Monkey-patch for aioesphomeapi
+
+```python
+# In __init__.py — patches _convert_bluetooth_uuid to handle empty UUID fields
+import aioesphomeapi.model as _esphome_model
+_original = _esphome_model._convert_bluetooth_uuid
+def _safe(value):
+    try: return _original(value)
+    except (IndexError, AttributeError, TypeError):
+        uuid_list = getattr(value, "uuid", None) or []
+        if len(uuid_list) == 2:
+            from uuid import UUID
+            return str(UUID(int=(uuid_list[0] << 64) | uuid_list[1]))
+        return "00000000-0000-1000-8000-00805f9b34fb"
+_esphome_model._convert_bluetooth_uuid = _safe
+```
+
+---
+
+## Related Devices
+
+These scales share the same or similar protocol families:
+
+| Device | Custom Service | Protocol |
+|--------|---------------|----------|
+| **Sanitas SBF73** | 0xFFFF | BF105 variant (this doc) |
+| Sanitas SBF72 | 0xFFFF | Same as SBF73 |
+| Beurer BF105/720 | 0xFFFF | Same custom service |
+| Beurer BF950 | 0xFFFF | Same custom service |
+| Beurer BF600/850 | 0xFFF0 | Different custom chars |
+| Beurer BF700/710/800 | 0xFFE0 | Proprietary framed protocol |
+| Sanitas SBF70/75 | 0xFFE0 | Same as BF700 |
+
+---
+
 ## Sources
 
 - **Sanitas HealthCoach APK v3.0.1** — decompiled via androguard
