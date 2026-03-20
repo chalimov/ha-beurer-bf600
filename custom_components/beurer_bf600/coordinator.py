@@ -86,12 +86,19 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
     @property
     def user_name(self) -> str:
         """Return display name for current measurement's user."""
-        # Check user_names dict first (maps initials to full name)
-        if self._last_data and self._last_data.user_initials:
-            mapped = self._user_names.get(self._last_data.user_initials, "")
-            if mapped:
-                return mapped
-        # Fall back to single user_name config
+        if not self._last_data:
+            return self._user_name
+
+        initials = self._last_data.user_initials
+        # If initials not set, try resolving from user_id + all_user_initials
+        if not initials and self._last_data.user_id and self._last_data.all_user_initials:
+            initials = self._last_data.all_user_initials.get(self._last_data.user_id)
+
+        if initials:
+            mapped = self._user_names.get(initials, "")
+            return mapped or initials
+
+        # Fall back to single user_name config only when we have no user_id info
         return self._user_name
 
     @property

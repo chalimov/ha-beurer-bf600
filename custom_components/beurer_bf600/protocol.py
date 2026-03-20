@@ -192,22 +192,44 @@ async def _read_bf600(ctx: _ReadContext) -> None:
     # Write current time
     await _write_current_time(client)
 
-    # Trigger custom FFFF user list + measurement (BF105/SBF73 pattern)
-    for char_uuid, name in [
-        (CHAR_CUSTOM_FFFF_USER_LIST, "FFFF/UserList"),
-        (CHAR_CUSTOM_FFFF_MEASURE_REQ, "FFFF/Measure"),
-    ]:
-        try:
-            await client.write_gatt_char(char_uuid, bytes([0x00]), response=True)
-            _LOGGER.debug("Wrote trigger to %s", name)
-        except Exception as e:
-            _LOGGER.debug("Write %s failed: %s", name, e)
+    # Trigger user list first, then measurement (BF105/SBF73 pattern)
+    # User list must arrive before measurement so we can resolve user_initials
+    try:
+        await client.write_gatt_char(
+            CHAR_CUSTOM_FFFF_USER_LIST, bytes([0x00]), response=True
+        )
+        _LOGGER.debug("Wrote trigger to FFFF/UserList")
+    except Exception as e:
+        _LOGGER.debug("Write FFFF/UserList failed: %s", e)
+
+    # Give user list notifications time to arrive before triggering measurement
+    await asyncio.sleep(0.5)
+
+    try:
+        await client.write_gatt_char(
+            CHAR_CUSTOM_FFFF_MEASURE_REQ, bytes([0x00]), response=True
+        )
+        _LOGGER.debug("Wrote trigger to FFFF/Measure")
+    except Exception as e:
+        _LOGGER.debug("Write FFFF/Measure failed: %s", e)
 
     # Wait for data — long timeout since scale may need time to measure
     try:
         await asyncio.wait_for(ctx.event.wait(), timeout=30.0)
     except asyncio.TimeoutError:
         _LOGGER.debug("Timeout: no measurement data received after 30s")
+
+    # Allow remaining notifications (e.g. user list) to arrive
+    await asyncio.sleep(0.5)
+
+    # Post-resolve: if user_initials wasn't set during indication parsing
+    # (race: measurement arrived before user list), resolve it now
+    if ctx.data.user_id and ctx.data.all_user_initials and not ctx.data.user_initials:
+        ctx.data.user_initials = ctx.data.all_user_initials.get(ctx.data.user_id)
+        _LOGGER.debug(
+            "Post-resolve user_initials: id=%d → %s",
+            ctx.data.user_id, ctx.data.user_initials,
+        )
 
 
 
