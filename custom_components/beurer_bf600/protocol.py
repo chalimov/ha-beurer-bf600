@@ -224,8 +224,10 @@ async def _read_bf600(ctx: _ReadContext) -> None:
                 uid, result.weight_kg or 0,
                 result.timestamp.isoformat() if result.timestamp else "none",
             )
-            if best is None or _is_newer(result, best):
-                best = result
+            best = result
+            # Stop after first user with data — consenting for more users
+            # would re-tag the same measurement under a different user.
+            break
 
     if best:
         ctx.data.merge(best)
