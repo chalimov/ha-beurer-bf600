@@ -169,9 +169,9 @@ async def _read_bf600(ctx: _ReadContext) -> None:
 
     Protocol sequence for BF105/SBF73 variant (0xFFFF custom service):
     1. Subscribe to all notification/indication characteristics
-    2. Write current time
-    3. Query user list
-    4. For each user with a consent code: consent, trigger, collect data
+    2. Write current time, query user list
+    3. Wait ~20s for the scale to finish weighing (no consent yet!)
+    4. Quickly consent for each user and retrieve stored measurements
     5. Keep the measurement with the most recent timestamp
     """
     client = ctx.client
@@ -191,7 +191,7 @@ async def _read_bf600(ctx: _ReadContext) -> None:
         except Exception as e:
             _LOGGER.debug("Subscribe %s failed: %s", name, e)
 
-    # Write current time (before consent, matching official app order)
+    # Write current time
     await _write_current_time(client)
 
     # Query user list
@@ -203,26 +203,29 @@ async def _read_bf600(ctx: _ReadContext) -> None:
     except Exception as e:
         _LOGGER.debug("Write FFFF/UserList failed: %s", e)
 
-    await asyncio.sleep(0.5)
+    # Wait for the scale to finish weighing and store the result.
+    # The scale needs ~15-20s (weight stabilization + bioimpedance).
+    # We must NOT consent during this time — consent overrides user detection.
+    _LOGGER.debug("Waiting 20s for scale to complete measurement...")
+    await asyncio.sleep(20.0)
 
-    # Consent for each user and collect measurements.
-    # The freshest measurement (by timestamp) wins.
+    # Now sweep: consent for each user quickly, retrieve stored data.
+    # The freshest measurement (by timestamp) is from whoever just weighed.
     best: ScaleData | None = None
     consents = ctx.user_consents
     if not consents:
-        # Legacy single-user fallback
         consents = {ctx.user_index: ctx.consent_code}
 
     for uid, code in sorted(consents.items()):
         result = await _consent_and_read(ctx, uid, code)
         if result and result.has_data():
-            if best is None or _is_newer(result, best):
-                best = result
             _LOGGER.debug(
                 "User %d data: weight=%.2f ts=%s",
                 uid, result.weight_kg or 0,
                 result.timestamp.isoformat() if result.timestamp else "none",
             )
+            if best is None or _is_newer(result, best):
+                best = result
 
     if best:
         ctx.data.merge(best)
@@ -249,12 +252,10 @@ async def _consent_and_read(
     """Consent as a specific user, trigger measurement, return data."""
     client = ctx.client
 
-    # Reset event and data collection for this user
+    # Reset event and data for this user
     ctx.event.clear()
     user_data = ScaleData()
-    # Temporarily swap ctx.data so indication handlers write to user_data
     saved_data = ctx.data
-    # Preserve all_user_initials across attempts
     user_data.all_user_initials = saved_data.all_user_initials
     ctx.data = user_data
 
@@ -272,7 +273,7 @@ async def _consent_and_read(
         ctx.data = saved_data
         return None
 
-    # Trigger measurement for this user
+    # Trigger stored measurement retrieval
     try:
         await client.write_gatt_char(
             CHAR_CUSTOM_FFFF_MEASURE_REQ, bytes([0x00]), response=True
@@ -280,17 +281,16 @@ async def _consent_and_read(
     except Exception:
         pass
 
+    # Short wait — data should be stored and ready, no need to wait for live
     try:
-        await asyncio.wait_for(ctx.event.wait(), timeout=15.0)
+        await asyncio.wait_for(ctx.event.wait(), timeout=5.0)
     except asyncio.TimeoutError:
-        _LOGGER.debug("No data for user %d after consent", user_index)
+        _LOGGER.debug("No stored data for user %d", user_index)
 
-    # Allow trailing notifications
     await asyncio.sleep(0.3)
 
     result = ctx.data
     ctx.data = saved_data
-    # Restore all_user_initials if updated during this read
     if result.all_user_initials:
         saved_data.all_user_initials = result.all_user_initials
     return result if result.has_data() else None
