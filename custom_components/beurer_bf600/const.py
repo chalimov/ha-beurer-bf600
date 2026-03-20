@@ -97,3 +97,4 @@ CONF_MODEL_FAMILY = "model_family"
 CONF_CONSENT_CODE = "consent_code"
 CONF_USER_NAME = "user_name"
 CONF_USER_NAMES = "user_names"  # dict: {"AS": "Alexey Shalimov", "ELA": "Ela"}
+CONF_USER_CONSENTS = "user_consents"  # dict: {"1": 3691, "2": 1234} (user_index → code)

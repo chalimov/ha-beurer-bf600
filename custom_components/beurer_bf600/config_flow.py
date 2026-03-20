@@ -30,6 +30,7 @@ from .const import (
     CHAR_USER_CONTROL_POINT,
     CONF_CONSENT_CODE,
     CONF_MODEL_FAMILY,
+    CONF_USER_CONSENTS,
     CONF_USER_INDEX,
     CONF_USER_NAME,
     CONF_USER_NAMES,
@@ -204,21 +205,34 @@ class BeurerScalePairFlow(OptionsFlow):
                     break
         return names
 
+    def _get_consents(self) -> dict[int, int]:
+        """Return per-user consent codes from config."""
+        raw = self.config_entry.data.get(CONF_USER_CONSENTS, {})
+        result = {int(k): int(v) for k, v in raw.items() if int(v) > 0}
+        # Merge legacy single-user consent
+        legacy_idx = self.config_entry.data.get(CONF_USER_INDEX, 0)
+        legacy_code = self.config_entry.data.get(CONF_CONSENT_CODE, 0)
+        if legacy_idx and legacy_code and legacy_idx not in result:
+            result[legacy_idx] = legacy_code
+        return result
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Assign full names to scale users using sections."""
+        """Assign full names and consent codes to scale users."""
         from homeassistant.data_entry_flow import section
 
         all_initials = self._get_all_initials()
         names = self._get_names()
+        consents = self._get_consents()
 
         if user_input is not None:
             if user_input.get("repair"):
                 return await self.async_step_wake_scale()
 
-            # Extract names from sectioned input
+            # Extract names and consent codes from sectioned input
             new_names = {}
+            new_consents = {}
             for idx, initials in sorted(all_initials.items()):
                 sect_key = f"user_{initials}"
                 sect_data = user_input.get(sect_key, {})
@@ -226,23 +240,29 @@ class BeurerScalePairFlow(OptionsFlow):
                     full = sect_data.get("full_name", "").strip()
                     if full:
                         new_names[initials] = full
+                    code = int(sect_data.get("consent_code", 0) or 0)
+                    if code > 0:
+                        new_consents[str(idx)] = code
 
             new_data = {**self.config_entry.data}
             new_data[CONF_USER_NAMES] = new_names
+            new_data[CONF_USER_CONSENTS] = new_consents
             self.hass.config_entries.async_update_entry(
                 self.config_entry, data=new_data
             )
             await self.hass.config_entries.async_reload(self.config_entry.entry_id)
             return self.async_create_entry(data={})
 
-        # Build schema: one section per user
+        # Build schema: one section per user with name + consent code
         schema_dict = {}
         for idx, initials in sorted(all_initials.items()):
             sect_key = f"user_{initials}"
-            default = names.get(initials, "")
+            default_name = names.get(initials, "")
+            default_code = consents.get(idx, 0)
             schema_dict[vol.Optional(sect_key)] = section(
                 vol.Schema({
-                    vol.Optional("full_name", default=default): str,
+                    vol.Optional("full_name", default=default_name): str,
+                    vol.Optional("consent_code", default=default_code): int,
                 }),
                 {"collapsed": False},
             )

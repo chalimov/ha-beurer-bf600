@@ -104,8 +104,13 @@ async def read_scale(
     model_family: str = MODEL_FAMILY_BF600,
     user_index: int = 1,
     consent_code: int = 0,
+    user_consents: dict[int, int] | None = None,
 ) -> ScaleData:
-    """Connect to a scale and read all available measurement data."""
+    """Connect to a scale and read all available measurement data.
+
+    user_consents: dict mapping user_index → consent_code for all known users.
+    Falls back to user_index/consent_code if not provided (single-user mode).
+    """
     # Log discovered GATT services for diagnostics
     if client.services:
         for service in client.services:
@@ -116,7 +121,13 @@ async def read_scale(
     else:
         _LOGGER.debug("No GATT services discovered (services=%s)", client.services)
 
-    ctx = _ReadContext(client, user_index, consent_code=consent_code)
+    # Build consents dict: merge legacy single-user with multi-user
+    consents = dict(user_consents or {})
+    if user_index and consent_code and user_index not in consents:
+        consents[user_index] = consent_code
+
+    ctx = _ReadContext(client, user_index, consent_code=consent_code,
+                       user_consents=consents)
 
     if model_family == MODEL_FAMILY_BF700:
         await _read_bf700(ctx)
@@ -144,6 +155,7 @@ class _ReadContext:
     client: BleakClient
     user_index: int
     consent_code: int = 0
+    user_consents: dict[int, int] = field(default_factory=dict)
     data: ScaleData = field(default_factory=ScaleData)
     event: asyncio.Event = field(default_factory=asyncio.Event)
 
@@ -159,8 +171,8 @@ async def _read_bf600(ctx: _ReadContext) -> None:
     1. Subscribe to all notification/indication characteristics
     2. Write current time
     3. Query user list
-    4. Trigger measurement WITHOUT consent (let scale identify user)
-    5. Wait for data — if none arrives, fall back to UCP consent + retry
+    4. For each user with a consent code: consent, trigger, collect data
+    5. Keep the measurement with the most recent timestamp
     """
     client = ctx.client
 
@@ -193,25 +205,27 @@ async def _read_bf600(ctx: _ReadContext) -> None:
 
     await asyncio.sleep(0.5)
 
-    # Trigger measurement WITHOUT consent — let scale identify user naturally
-    try:
-        await client.write_gatt_char(
-            CHAR_CUSTOM_FFFF_MEASURE_REQ, bytes([0x00]), response=True
-        )
-        _LOGGER.debug("Wrote trigger to FFFF/Measure (no consent)")
-    except Exception as e:
-        _LOGGER.debug("Write FFFF/Measure failed: %s", e)
+    # Consent for each user and collect measurements.
+    # The freshest measurement (by timestamp) wins.
+    best: ScaleData | None = None
+    consents = ctx.user_consents
+    if not consents:
+        # Legacy single-user fallback
+        consents = {ctx.user_index: ctx.consent_code}
 
-    # Wait for data without consent
-    try:
-        await asyncio.wait_for(ctx.event.wait(), timeout=10.0)
-        _LOGGER.debug("Data received without UCP consent")
-    except asyncio.TimeoutError:
-        _LOGGER.debug("No data without consent, falling back to UCP consent")
-        await _consent_and_retry(ctx)
+    for uid, code in sorted(consents.items()):
+        result = await _consent_and_read(ctx, uid, code)
+        if result and result.has_data():
+            if best is None or _is_newer(result, best):
+                best = result
+            _LOGGER.debug(
+                "User %d data: weight=%.2f ts=%s",
+                uid, result.weight_kg or 0,
+                result.timestamp.isoformat() if result.timestamp else "none",
+            )
 
-    # Allow remaining notifications to arrive
-    await asyncio.sleep(0.5)
+    if best:
+        ctx.data.merge(best)
 
     # Post-resolve user_initials from all_user_initials + user_id
     if ctx.data.user_id and ctx.data.all_user_initials and not ctx.data.user_initials:
@@ -222,26 +236,43 @@ async def _read_bf600(ctx: _ReadContext) -> None:
         )
 
 
-async def _consent_and_retry(ctx: _ReadContext) -> None:
-    """Send UCP consent and retry measurement — fallback when data needs auth."""
+def _is_newer(a: ScaleData, b: ScaleData) -> bool:
+    """Return True if measurement a is newer than b."""
+    if a.timestamp and b.timestamp:
+        return a.timestamp > b.timestamp
+    return a.timestamp is not None
+
+
+async def _consent_and_read(
+    ctx: _ReadContext, user_index: int, consent_code: int
+) -> ScaleData | None:
+    """Consent as a specific user, trigger measurement, return data."""
     client = ctx.client
 
+    # Reset event and data collection for this user
+    ctx.event.clear()
+    user_data = ScaleData()
+    # Temporarily swap ctx.data so indication handlers write to user_data
+    saved_data = ctx.data
+    # Preserve all_user_initials across attempts
+    user_data.all_user_initials = saved_data.all_user_initials
+    ctx.data = user_data
+
     try:
-        consent_cmd = struct.pack(
-            "<BBH", UCP_CONSENT, ctx.user_index, ctx.consent_code
-        )
+        consent_cmd = struct.pack("<BBH", UCP_CONSENT, user_index, consent_code)
         _LOGGER.debug(
-            "UCP consent cmd: %s (user=%d code=%d/0x%04X)",
-            consent_cmd.hex(), ctx.user_index, ctx.consent_code, ctx.consent_code,
+            "UCP consent: user=%d code=%d/0x%04X",
+            user_index, consent_code, consent_code,
         )
         await client.write_gatt_char(
             CHAR_USER_CONTROL_POINT, consent_cmd, response=True
         )
-        _LOGGER.debug("UCP consent written OK")
     except Exception as e:
-        _LOGGER.debug("UCP consent write failed: %s", e)
+        _LOGGER.debug("UCP consent failed for user %d: %s", user_index, e)
+        ctx.data = saved_data
+        return None
 
-    # Re-trigger measurement after consent
+    # Trigger measurement for this user
     try:
         await client.write_gatt_char(
             CHAR_CUSTOM_FFFF_MEASURE_REQ, bytes([0x00]), response=True
@@ -249,11 +280,20 @@ async def _consent_and_retry(ctx: _ReadContext) -> None:
     except Exception:
         pass
 
-    ctx.event.clear()
     try:
-        await asyncio.wait_for(ctx.event.wait(), timeout=20.0)
+        await asyncio.wait_for(ctx.event.wait(), timeout=15.0)
     except asyncio.TimeoutError:
-        _LOGGER.debug("Timeout: no data even after UCP consent")
+        _LOGGER.debug("No data for user %d after consent", user_index)
+
+    # Allow trailing notifications
+    await asyncio.sleep(0.3)
+
+    result = ctx.data
+    ctx.data = saved_data
+    # Restore all_user_initials if updated during this read
+    if result.all_user_initials:
+        saved_data.all_user_initials = result.all_user_initials
+    return result if result.has_data() else None
 
 
 

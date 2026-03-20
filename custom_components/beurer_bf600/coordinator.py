@@ -27,6 +27,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .const import (
     CONF_CONSENT_CODE,
     CONF_MODEL_FAMILY,
+    CONF_USER_CONSENTS,
     CONF_USER_INDEX,
     CONF_USER_NAME,
     CONF_USER_NAMES,
@@ -64,6 +65,11 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
         self._consent_code: int = entry.data.get(CONF_CONSENT_CODE, 0)
         self._user_name: str = entry.data.get(CONF_USER_NAME, "")
         self._user_names: dict[str, str] = entry.data.get(CONF_USER_NAMES, {})
+        # Per-user consent codes: {user_index: consent_code}
+        raw_consents = entry.data.get(CONF_USER_CONSENTS, {})
+        self._user_consents: dict[int, int] = {
+            int(k): int(v) for k, v in raw_consents.items() if int(v) > 0
+        }
         self._client: BleakClient | None = None
         self._connect_lock = asyncio.Lock()
         self._connected = False
@@ -227,6 +233,7 @@ class BeurerScaleCoordinator(DataUpdateCoordinator[ScaleData]):
                     model_family=self._model_family,
                     user_index=self._user_index,
                     consent_code=self._consent_code,
+                    user_consents=self._user_consents,
                 )
                 if data.has_data():
                     self._last_data = data

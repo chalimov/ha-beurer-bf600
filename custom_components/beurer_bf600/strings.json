@@ -21,7 +21,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "{name} — User Names",
+        "title": "{name} — Users",
         "description": "{info}",
         "data": {
           "repair": "Re-pair with scale"
@@ -29,11 +29,17 @@
         "sections": {
           "user_AS": {
             "name": "User 1 : AS",
-            "data": { "full_name": "Full name (optional)" }
+            "data": {
+              "full_name": "Full name (optional)",
+              "consent_code": "PIN code from scale"
+            }
           },
           "user_ELA": {
             "name": "User 2 : ELA",
-            "data": { "full_name": "Full name (optional)" }
+            "data": {
+              "full_name": "Full name (optional)",
+              "consent_code": "PIN code from scale"
+            }
           }
         }
       },
