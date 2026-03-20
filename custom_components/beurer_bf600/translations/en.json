@@ -21,8 +21,8 @@
   "options": {
     "step": {
       "init": {
-        "title": "Settings for {name}",
-        "description": "Users on scale: {users}\n\nAssign full names to each user (leave empty to use initials).",
+        "title": "{name} — User Names",
+        "description": "{users}\n\nEnter full name for each user (leave empty to show initials).",
         "data": {
           "repair": "Re-pair with scale"
         }

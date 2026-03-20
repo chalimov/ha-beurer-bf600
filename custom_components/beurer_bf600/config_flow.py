@@ -209,11 +209,10 @@ class BeurerScalePairFlow(OptionsFlow):
                 break
 
         if user_input is not None:
-            # Collect name mappings from form
+            # Collect name mappings from form (keys are initials)
             user_names = {}
             for idx, initials in sorted(all_initials.items()):
-                key = f"name_{initials}"
-                name = user_input.get(key, "").strip()
+                name = user_input.get(initials, "").strip()
                 if name:
                     user_names[initials] = name
 
@@ -229,17 +228,18 @@ class BeurerScalePairFlow(OptionsFlow):
             await self.hass.config_entries.async_reload(self.config_entry.entry_id)
             return self.async_create_entry(data={})
 
-        # Build form with a name field per scale user
+        # Build form: one field per scale user, keyed by initials
         schema_dict = {}
-        user_lines = []
+        user_table = []
         for idx, initials in sorted(all_initials.items()):
-            key = f"name_{initials}"
             default = current_names.get(initials, "")
-            schema_dict[vol.Optional(key, default=default)] = str
-            user_lines.append(f"User {idx}: **{initials}**")
+            # Use initials as field key — HA shows it as the label
+            schema_dict[vol.Optional(initials, default=default)] = str
+            status = f"→ {default}" if default else "(not set)"
+            user_table.append(f"Slot {idx}: **{initials}** {status}")
 
-        if not schema_dict:
-            user_lines.append("No users found — step on the scale first")
+        if not user_table:
+            user_table.append("No users found yet — step on the scale first")
 
         schema_dict[vol.Optional("repair", default=False)] = bool
 
@@ -248,7 +248,7 @@ class BeurerScalePairFlow(OptionsFlow):
             data_schema=vol.Schema(schema_dict),
             description_placeholders={
                 "name": self._name,
-                "users": ", ".join(user_lines) if user_lines else "unknown",
+                "users": "\n".join(user_table),
             },
         )
 
