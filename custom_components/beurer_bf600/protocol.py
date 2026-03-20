@@ -157,10 +157,10 @@ async def _read_bf600(ctx: _ReadContext) -> None:
 
     Protocol sequence for BF105/SBF73 variant (0xFFFF custom service):
     1. Subscribe to all notification/indication characteristics
-    2. Send UCP consent
-    3. Write current time
-    4. Trigger custom service user list + measurement
-    5. Wait for data (indications or notifications)
+    2. Write current time
+    3. Query user list
+    4. Trigger measurement WITHOUT consent (let scale identify user)
+    5. Wait for data — if none arrives, fall back to UCP consent + retry
     """
     client = ctx.client
 
@@ -179,21 +179,10 @@ async def _read_bf600(ctx: _ReadContext) -> None:
         except Exception as e:
             _LOGGER.debug("Subscribe %s failed: %s", name, e)
 
-    # UCP consent
-    try:
-        consent_cmd = struct.pack("<BBH", UCP_CONSENT, ctx.user_index, ctx.consent_code)
-        _LOGGER.debug("UCP consent cmd: %s (user=%d code=%d/0x%04X)",
-                       consent_cmd.hex(), ctx.user_index, ctx.consent_code, ctx.consent_code)
-        await client.write_gatt_char(CHAR_USER_CONTROL_POINT, consent_cmd, response=True)
-        _LOGGER.debug("UCP consent written OK")
-    except Exception as e:
-        _LOGGER.debug("UCP consent write failed: %s", e)
-
-    # Write current time
+    # Write current time (before consent, matching official app order)
     await _write_current_time(client)
 
-    # Trigger user list first, then measurement (BF105/SBF73 pattern)
-    # User list must arrive before measurement so we can resolve user_initials
+    # Query user list
     try:
         await client.write_gatt_char(
             CHAR_CUSTOM_FFFF_USER_LIST, bytes([0x00]), response=True
@@ -202,34 +191,69 @@ async def _read_bf600(ctx: _ReadContext) -> None:
     except Exception as e:
         _LOGGER.debug("Write FFFF/UserList failed: %s", e)
 
-    # Give user list notifications time to arrive before triggering measurement
     await asyncio.sleep(0.5)
 
+    # Trigger measurement WITHOUT consent — let scale identify user naturally
     try:
         await client.write_gatt_char(
             CHAR_CUSTOM_FFFF_MEASURE_REQ, bytes([0x00]), response=True
         )
-        _LOGGER.debug("Wrote trigger to FFFF/Measure")
+        _LOGGER.debug("Wrote trigger to FFFF/Measure (no consent)")
     except Exception as e:
         _LOGGER.debug("Write FFFF/Measure failed: %s", e)
 
-    # Wait for data — long timeout since scale may need time to measure
+    # Wait for data without consent
     try:
-        await asyncio.wait_for(ctx.event.wait(), timeout=30.0)
+        await asyncio.wait_for(ctx.event.wait(), timeout=10.0)
+        _LOGGER.debug("Data received without UCP consent")
     except asyncio.TimeoutError:
-        _LOGGER.debug("Timeout: no measurement data received after 30s")
+        _LOGGER.debug("No data without consent, falling back to UCP consent")
+        await _consent_and_retry(ctx)
 
-    # Allow remaining notifications (e.g. user list) to arrive
+    # Allow remaining notifications to arrive
     await asyncio.sleep(0.5)
 
-    # Post-resolve: if user_initials wasn't set during indication parsing
-    # (race: measurement arrived before user list), resolve it now
+    # Post-resolve user_initials from all_user_initials + user_id
     if ctx.data.user_id and ctx.data.all_user_initials and not ctx.data.user_initials:
         ctx.data.user_initials = ctx.data.all_user_initials.get(ctx.data.user_id)
         _LOGGER.debug(
             "Post-resolve user_initials: id=%d → %s",
             ctx.data.user_id, ctx.data.user_initials,
         )
+
+
+async def _consent_and_retry(ctx: _ReadContext) -> None:
+    """Send UCP consent and retry measurement — fallback when data needs auth."""
+    client = ctx.client
+
+    try:
+        consent_cmd = struct.pack(
+            "<BBH", UCP_CONSENT, ctx.user_index, ctx.consent_code
+        )
+        _LOGGER.debug(
+            "UCP consent cmd: %s (user=%d code=%d/0x%04X)",
+            consent_cmd.hex(), ctx.user_index, ctx.consent_code, ctx.consent_code,
+        )
+        await client.write_gatt_char(
+            CHAR_USER_CONTROL_POINT, consent_cmd, response=True
+        )
+        _LOGGER.debug("UCP consent written OK")
+    except Exception as e:
+        _LOGGER.debug("UCP consent write failed: %s", e)
+
+    # Re-trigger measurement after consent
+    try:
+        await client.write_gatt_char(
+            CHAR_CUSTOM_FFFF_MEASURE_REQ, bytes([0x00]), response=True
+        )
+    except Exception:
+        pass
+
+    ctx.event.clear()
+    try:
+        await asyncio.wait_for(ctx.event.wait(), timeout=20.0)
+    except asyncio.TimeoutError:
+        _LOGGER.debug("Timeout: no data even after UCP consent")
 
 
 
