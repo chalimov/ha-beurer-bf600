@@ -22,9 +22,19 @@
     "step": {
       "init": {
         "title": "{name} — User Names",
-        "description": "Assign a full name to each scale user. Leave empty to show initials.\n\n{users}",
+        "description": "{info}",
         "data": {
           "repair": "Re-pair with scale"
+        },
+        "sections": {
+          "user_AS": {
+            "name": "User 1 : AS",
+            "data": { "full_name": "Full name (optional)" }
+          },
+          "user_ELA": {
+            "name": "User 2 : ELA",
+            "data": { "full_name": "Full name (optional)" }
+          }
         }
       },
       "wake_scale": {

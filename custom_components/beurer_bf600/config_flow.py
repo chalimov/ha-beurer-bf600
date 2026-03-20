@@ -179,80 +179,85 @@ class BeurerScalePairFlow(OptionsFlow):
         self._name: str = config_entry.data.get(CONF_NAME, "Beurer Scale")
         self._pair_result: str | None = None
         self._user_list: list[dict] = []
+        self._selected_initials: str | None = None
+
+    def _get_all_initials(self) -> dict[int, str]:
+        coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        result: dict[int, str] = {}
+        if coordinator and coordinator.data and coordinator.data.all_user_initials:
+            result = coordinator.data.all_user_initials
+        elif coordinator and coordinator._last_data and coordinator._last_data.all_user_initials:
+            result = coordinator._last_data.all_user_initials
+        if not result and coordinator and coordinator._last_data:
+            d = coordinator._last_data
+            if d.user_initials and d.user_id:
+                result = {d.user_id: d.user_initials}
+        return {int(k): v for k, v in result.items()}
+
+    def _get_names(self) -> dict[str, str]:
+        names: dict[str, str] = dict(self.config_entry.data.get(CONF_USER_NAMES, {}))
+        if not names:
+            old = self.config_entry.data.get(CONF_USER_NAME, "")
+            if old:
+                for initials in self._get_all_initials().values():
+                    names[initials] = old
+                    break
+        return names
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Main options step: assign full names to scale users."""
-        # Get known user initials from coordinator (live or stored)
-        coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
-        all_initials: dict[int, str] = {}
-        if coordinator and coordinator.data and coordinator.data.all_user_initials:
-            all_initials = coordinator.data.all_user_initials
-        elif coordinator and coordinator._last_data and coordinator._last_data.all_user_initials:
-            all_initials = coordinator._last_data.all_user_initials
-        # Fallback: use single user_initials + user_id if all_user_initials empty
-        if not all_initials and coordinator and coordinator._last_data:
-            d = coordinator._last_data
-            if d.user_initials and d.user_id:
-                all_initials = {d.user_id: d.user_initials}
-        # Convert string keys from JSON storage back to int
-        all_initials = {int(k): v for k, v in all_initials.items()}
+        """Assign full names to scale users using sections."""
+        from homeassistant.data_entry_flow import section
 
-        # Current name mappings
-        current_names: dict[str, str] = self.config_entry.data.get(CONF_USER_NAMES, {})
-        # Migrate old single user_name if present
-        old_name = self.config_entry.data.get(CONF_USER_NAME, "")
-        if old_name and not current_names:
-            for initials in all_initials.values():
-                current_names[initials] = old_name
-                break
+        all_initials = self._get_all_initials()
+        names = self._get_names()
 
         if user_input is not None:
-            # Collect name mappings from form (keys are initials)
-            user_names = {}
+            if user_input.get("repair"):
+                return await self.async_step_wake_scale()
+
+            # Extract names from sectioned input
+            new_names = {}
             for idx, initials in sorted(all_initials.items()):
-                name = user_input.get(initials, "").strip()
-                if name:
-                    user_names[initials] = name
+                sect_key = f"user_{initials}"
+                sect_data = user_input.get(sect_key, {})
+                if isinstance(sect_data, dict):
+                    full = sect_data.get("full_name", "").strip()
+                    if full:
+                        new_names[initials] = full
 
             new_data = {**self.config_entry.data}
-            new_data[CONF_USER_NAMES] = user_names
+            new_data[CONF_USER_NAMES] = new_names
             self.hass.config_entries.async_update_entry(
                 self.config_entry, data=new_data
             )
-
-            if user_input.get("repair", False):
-                return await self.async_step_wake_scale()
-
             await self.hass.config_entries.async_reload(self.config_entry.entry_id)
             return self.async_create_entry(data={})
 
-        # Build markdown table for description
-        if all_initials:
-            rows = ["| Slot | User | Full Name |", "|------|------|-----------|"]
-            for idx, initials in sorted(all_initials.items()):
-                full = current_names.get(initials, "—")
-                rows.append(f"| {idx} | {initials} | {full} |")
-            user_table = "\n".join(rows)
-        else:
-            user_table = "No users found yet — step on the scale first."
-
-        # Input fields: one per user
+        # Build schema: one section per user
         schema_dict = {}
         for idx, initials in sorted(all_initials.items()):
-            default = current_names.get(initials, "")
-            schema_dict[vol.Optional(initials, default=default)] = str
+            sect_key = f"user_{initials}"
+            default = names.get(initials, "")
+            schema_dict[vol.Optional(sect_key)] = section(
+                vol.Schema({
+                    vol.Optional("full_name", default=default): str,
+                }),
+                {"collapsed": False},
+            )
+
+        if not all_initials:
+            info = "No users found — step on the scale first."
+        else:
+            info = ""
 
         schema_dict[vol.Optional("repair", default=False)] = bool
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(schema_dict),
-            description_placeholders={
-                "name": self._name,
-                "users": user_table,
-            },
+            description_placeholders={"name": self._name, "info": info},
         )
 
     async def async_step_wake_scale(
