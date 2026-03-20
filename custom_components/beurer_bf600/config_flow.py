@@ -191,7 +191,12 @@ class BeurerScalePairFlow(OptionsFlow):
             all_initials = coordinator.data.all_user_initials
         elif coordinator and coordinator._last_data and coordinator._last_data.all_user_initials:
             all_initials = coordinator._last_data.all_user_initials
-        # Convert string keys from storage back to int
+        # Fallback: use single user_initials + user_id if all_user_initials empty
+        if not all_initials and coordinator and coordinator._last_data:
+            d = coordinator._last_data
+            if d.user_initials and d.user_id:
+                all_initials = {d.user_id: d.user_initials}
+        # Convert string keys from JSON storage back to int
         all_initials = {int(k): v for k, v in all_initials.items()}
 
         # Current name mappings
