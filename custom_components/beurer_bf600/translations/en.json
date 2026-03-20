@@ -22,7 +22,7 @@
     "step": {
       "init": {
         "title": "{name} — User Names",
-        "description": "{users}\n\nEnter full name for each user (leave empty to show initials).",
+        "description": "Assign a full name to each scale user. Leave empty to show initials.\n\n{users}",
         "data": {
           "repair": "Re-pair with scale"
         }

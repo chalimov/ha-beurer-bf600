@@ -228,18 +228,21 @@ class BeurerScalePairFlow(OptionsFlow):
             await self.hass.config_entries.async_reload(self.config_entry.entry_id)
             return self.async_create_entry(data={})
 
-        # Build form: one field per scale user, keyed by initials
+        # Build markdown table for description
+        if all_initials:
+            rows = ["| Slot | User | Full Name |", "|------|------|-----------|"]
+            for idx, initials in sorted(all_initials.items()):
+                full = current_names.get(initials, "—")
+                rows.append(f"| {idx} | {initials} | {full} |")
+            user_table = "\n".join(rows)
+        else:
+            user_table = "No users found yet — step on the scale first."
+
+        # Input fields: one per user
         schema_dict = {}
-        user_table = []
         for idx, initials in sorted(all_initials.items()):
             default = current_names.get(initials, "")
-            # Use initials as field key — HA shows it as the label
             schema_dict[vol.Optional(initials, default=default)] = str
-            status = f"→ {default}" if default else "(not set)"
-            user_table.append(f"Slot {idx}: **{initials}** {status}")
-
-        if not user_table:
-            user_table.append("No users found yet — step on the scale first")
 
         schema_dict[vol.Optional("repair", default=False)] = bool
 
@@ -248,7 +251,7 @@ class BeurerScalePairFlow(OptionsFlow):
             data_schema=vol.Schema(schema_dict),
             description_placeholders={
                 "name": self._name,
-                "users": "\n".join(user_table),
+                "users": user_table,
             },
         )
 
